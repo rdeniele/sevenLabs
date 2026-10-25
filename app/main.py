@@ -30,6 +30,14 @@ MODELS_DIR = DATA_DIR / "models"
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_SCRIPT_CHARS = 5_000
+STRICT_READING_OPTIONS = {
+    # Stay close to Chatterbox's tuned defaults. Aggressive filtering can make
+    # Nano select silence tokens for the rest of an otherwise valid take.
+    "temperature": 0.65,
+    "top_p": 0.95,
+    "top_k": 1000,
+    "repetition_penalty": 1.2,
+}
 
 for directory in (VOICES_DIR, OUTPUTS_DIR, MODELS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -159,6 +167,48 @@ class VoiceEngine:
             return values
         return {key: value for key, value in values.items() if key in signature.parameters}
 
+    @staticmethod
+    def _trim_trailing_silence(
+        wave: Any,
+        sample_rate: int,
+        threshold: float = 0.001,
+        minimum_tail_seconds: float = 1.0,
+        keep_seconds: float = 0.35,
+    ) -> Any:
+        """Remove a long silent tail while preserving natural sentence room."""
+        activity = wave.abs()
+        if getattr(activity, "ndim", 1) > 1:
+            activity = activity.amax(dim=0)
+        active_samples = (activity > threshold).nonzero(as_tuple=False).flatten()
+        if active_samples.numel() == 0:
+            return wave
+
+        last_active = int(active_samples[-1].item())
+        tail_samples = wave.shape[-1] - last_active - 1
+        if tail_samples <= int(sample_rate * minimum_tail_seconds):
+            return wave
+
+        end = min(wave.shape[-1], last_active + 1 + int(sample_rate * keep_seconds))
+        return wave[..., :end]
+
+    @staticmethod
+    def _spoken_seconds(wave: Any, sample_rate: int, threshold: float = 0.001) -> float:
+        activity = wave.abs()
+        if getattr(activity, "ndim", 1) > 1:
+            activity = activity.amax(dim=0)
+        active_samples = (activity > threshold).nonzero(as_tuple=False).flatten()
+        if active_samples.numel() == 0:
+            return 0.0
+        return float((int(active_samples[-1].item()) + 1) / sample_rate)
+
+    @classmethod
+    def _needs_silence_retry(cls, wave: Any, sample_rate: int, text: str) -> bool:
+        word_count = len(text.split())
+        if word_count < 20:
+            return False
+        minimum_expected_seconds = min(12.0, word_count * 0.15)
+        return cls._spoken_seconds(wave, sample_rate) < minimum_expected_seconds
+
     def generate(
         self,
         model_name: str,
@@ -177,25 +227,38 @@ class VoiceEngine:
                 import torch
                 import torchaudio as ta
 
-                torch.manual_seed(seed)
-                if torch.cuda.is_available():
-                    torch.cuda.manual_seed_all(seed)
-
                 values: dict[str, Any] = {
                     "audio_prompt_path": str(reference_path),
                     "exaggeration": exaggeration,
                     "cfg_weight": cfg_weight,
+                    **STRICT_READING_OPTIONS,
                 }
                 if model_name == "multilingual":
                     values["language_id"] = language
 
                 kwargs = self._supported_kwargs(handle.model.generate, values)
-                wave = handle.model.generate(text, **kwargs)
-                if getattr(wave, "ndim", 1) == 1:
-                    wave = wave.unsqueeze(0)
+                def generate_once(attempt_seed: int) -> Any:
+                    torch.manual_seed(attempt_seed)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(attempt_seed)
+                    attempt = handle.model.generate(text, **kwargs)
+                    if getattr(attempt, "ndim", 1) == 1:
+                        attempt = attempt.unsqueeze(0)
+                    return attempt
+
+                used_seed = seed
+                wave = generate_once(used_seed)
+                if self._needs_silence_retry(wave, handle.model.sr, text):
+                    retry_seed = (seed + 1) % (2**32)
+                    retry_wave = generate_once(retry_seed)
+                    if self._spoken_seconds(retry_wave, handle.model.sr) > self._spoken_seconds(wave, handle.model.sr):
+                        wave = retry_wave
+                        used_seed = retry_seed
+
+                wave = self._trim_trailing_silence(wave, handle.model.sr)
                 ta.save(str(output_path), wave.detach().cpu(), handle.model.sr)
                 duration = float(wave.shape[-1] / handle.model.sr)
-                return {"duration_seconds": round(duration, 2), "device": handle.device}
+                return {"duration_seconds": round(duration, 2), "device": handle.device, "seed": used_seed}
             except RuntimeError as error:
                 if "out of memory" in str(error).lower():
                     try:
@@ -344,7 +407,7 @@ async def generate(request: GenerateRequest) -> dict[str, Any]:
         "text": request.text.strip(),
         "model": request.model,
         "language": request.language,
-        "seed": seed,
+        "seed": result["seed"],
         "created_at": now_iso(),
         "duration_seconds": result["duration_seconds"],
         "device": result["device"],

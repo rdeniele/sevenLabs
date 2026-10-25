@@ -5,6 +5,7 @@ import io
 import wave
 
 import pytest
+import torch
 from fastapi import HTTPException, UploadFile
 
 from app import main
@@ -26,6 +27,36 @@ def test_health_reports_local_engine() -> None:
     assert body["engine"]["installed"] is True
     assert body["engine"]["device"] in {"cpu", "cuda"}
     assert body["models"] == ["nano", "turbo", "multilingual"]
+
+
+def test_strict_reading_options_reduce_sampling_randomness() -> None:
+    options = main.STRICT_READING_OPTIONS
+    assert options["temperature"] < 0.8
+    assert options["top_p"] == 0.95
+    assert options["top_k"] == 1000
+    assert options["repetition_penalty"] == 1.2
+
+
+def test_long_trailing_silence_is_trimmed() -> None:
+    spoken = torch.full((1, 2_000), 0.1)
+    silence = torch.zeros((1, 3_000))
+    trimmed = main.VoiceEngine._trim_trailing_silence(
+        torch.cat((spoken, silence), dim=-1),
+        sample_rate=1_000,
+    )
+    assert trimmed.shape[-1] == 2_350
+
+
+def test_long_script_with_only_brief_speech_is_retried() -> None:
+    brief_speech = torch.cat((torch.full((1, 2_000), 0.1), torch.zeros((1, 38_000))), dim=-1)
+    long_script = " ".join(["word"] * 79)
+    assert main.VoiceEngine._needs_silence_retry(brief_speech, 1_000, long_script) is True
+
+
+def test_healthy_take_does_not_retry() -> None:
+    healthy_speech = torch.full((1, 27_000), 0.1)
+    long_script = " ".join(["word"] * 79)
+    assert main.VoiceEngine._needs_silence_retry(healthy_speech, 1_000, long_script) is False
 
 
 def test_voice_lifecycle() -> None:
