@@ -85,11 +85,30 @@
             </div>
           </div>
 
-          <div class="script-field">
-            <textarea id="scriptInput" maxlength="5000" placeholder="Write what you want your voice to say..." aria-label="Speech script"></textarea>
-            <div class="script-meta">
-              <span id="wordCount">0 words</span>
-              <span id="characterCount">0 / 5,000</span>
+          <div class="phase-stack" aria-label="Speech phase queue">
+            <div class="script-field">
+              <div class="phase-heading"><strong>Phase 1</strong><span>Start here</span></div>
+              <textarea class="script-input" id="scriptInput" maxlength="5000" placeholder="Write the first 80–100 words..." aria-label="Speech script phase 1"></textarea>
+              <div class="script-meta">
+                <span data-word-count>0 words</span>
+                <span data-character-count>0 / 5,000</span>
+              </div>
+            </div>
+            <div class="script-field">
+              <div class="phase-heading"><strong>Phase 2</strong><span>Optional</span></div>
+              <textarea class="script-input" maxlength="5000" placeholder="Add the next part while Phase 1 generates..." aria-label="Speech script phase 2"></textarea>
+              <div class="script-meta">
+                <span data-word-count>0 words</span>
+                <span data-character-count>0 / 5,000</span>
+              </div>
+            </div>
+            <div class="script-field">
+              <div class="phase-heading"><strong>Phase 3</strong><span>Optional</span></div>
+              <textarea class="script-input" maxlength="5000" placeholder="Add a final part to the queue..." aria-label="Speech script phase 3"></textarea>
+              <div class="script-meta">
+                <span data-word-count>0 words</span>
+                <span data-character-count>0 / 5,000</span>
+              </div>
             </div>
           </div>
 
@@ -137,7 +156,7 @@
             <p id="generationHint">Add a voice sample and script to begin.</p>
             <button class="button generate-button" id="generateButton" type="button" disabled>
               <span class="spark-icon" aria-hidden="true">✦</span>
-              Generate speech
+              <span id="generateLabel">Generate speech</span>
               <span class="key-hint" aria-hidden="true">Ctrl ↵</span>
             </button>
           </div>
@@ -148,7 +167,7 @@
               <span id="progressTimer">0:00</span>
             </div>
             <div class="progress-track"><span></span></div>
-            <p>The first run downloads model weights. Later generations work offline.</p>
+            <p>Queued phases generate in order so the local model stays stable.</p>
           </div>
 
           <div class="error-banner" id="errorBanner" role="alert" hidden></div>

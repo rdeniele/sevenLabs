@@ -16,11 +16,11 @@ const state = {
 const elements = {
   systemState: $("#systemState"), systemText: $("#systemText"),
   voiceList: $("#voiceList"), voiceEmpty: $("#voiceEmpty"), addVoiceButton: $("#addVoiceButton"),
-  recordButton: $("#recordButton"), fileInput: $("#fileInput"), scriptInput: $("#scriptInput"),
-  wordCount: $("#wordCount"), characterCount: $("#characterCount"), modelSelect: $("#modelSelect"),
+  recordButton: $("#recordButton"), fileInput: $("#fileInput"), scriptInputs: [...document.querySelectorAll(".script-input")],
+  modelSelect: $("#modelSelect"),
   languageSelect: $("#languageSelect"), expressionRange: $("#expressionRange"), expressionValue: $("#expressionValue"),
   fidelityRange: $("#fidelityRange"), fidelityValue: $("#fidelityValue"), consentCheckbox: $("#consentCheckbox"),
-  generateButton: $("#generateButton"), generationHint: $("#generationHint"), generationProgress: $("#generationProgress"),
+  generateButton: $("#generateButton"), generateLabel: $("#generateLabel"), generationHint: $("#generationHint"), generationProgress: $("#generationProgress"),
   progressLabel: $("#progressLabel"), progressTimer: $("#progressTimer"), errorBanner: $("#errorBanner"),
   historyList: $("#historyList"), historyEmpty: $("#historyEmpty"), voiceDialog: $("#voiceDialog"),
   voiceForm: $("#voiceForm"), dialogTitle: $("#dialogTitle"), dialogDescription: $("#dialogDescription"),
@@ -62,20 +62,29 @@ function showError(message) {
 function clearError() { elements.errorBanner.hidden = true; }
 
 function updateScriptStats() {
-  const text = elements.scriptInput.value;
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  elements.wordCount.textContent = `${words} ${words === 1 ? "word" : "words"}`;
-  elements.characterCount.textContent = `${text.length.toLocaleString()} / 5,000`;
+  elements.scriptInputs.forEach((input) => {
+    const text = input.value;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const field = input.closest(".script-field");
+    field.querySelector("[data-word-count]").textContent = `${words} ${words === 1 ? "word" : "words"}`;
+    field.querySelector("[data-character-count]").textContent = `${text.length.toLocaleString()} / 5,000`;
+  });
   updateGenerateState();
+}
+
+function queuedScripts() {
+  return elements.scriptInputs.map((input) => input.value.trim()).filter(Boolean);
 }
 
 function updateGenerateState() {
   const hasVoice = Boolean(state.selectedVoiceId);
-  const hasText = Boolean(elements.scriptInput.value.trim());
+  const scripts = queuedScripts();
+  const hasText = scripts.length > 0;
   const hasConsent = elements.consentCheckbox.checked;
   elements.generateButton.disabled = state.generating || !hasVoice || !hasText || !hasConsent;
+  elements.generateLabel.textContent = scripts.length > 1 ? `Generate ${scripts.length} phases` : "Generate speech";
 
-  if (state.generating) elements.generationHint.textContent = "Keep this window open while the local model works.";
+  if (state.generating) elements.generationHint.textContent = "Your queued phases will continue automatically.";
   else if (!hasVoice) elements.generationHint.textContent = "Add or select a voice sample to begin.";
   else if (!hasText) elements.generationHint.textContent = "Write a script for your voice to speak.";
   else if (!hasConsent) elements.generationHint.textContent = "Confirm permission before generating.";
@@ -275,28 +284,36 @@ async function saveVoice() {
 
 async function generateSpeech() {
   if (elements.generateButton.disabled) return;
+  const scripts = queuedScripts();
   clearError(); state.generating = true; updateGenerateState();
   elements.generationProgress.hidden = false;
-  elements.progressLabel.textContent = "Loading the local model and shaping your voice";
+  elements.progressLabel.textContent = `Preparing ${scripts.length} ${scripts.length === 1 ? "phase" : "phases"}`;
   const started = Date.now();
   const timer = setInterval(() => { elements.progressTimer.textContent = formatTime((Date.now() - started) / 1000); }, 250);
   try {
-    const entry = await api("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        voice_id: state.selectedVoiceId,
-        text: elements.scriptInput.value.trim(),
-        model: elements.modelSelect.value,
-        language: elements.languageSelect.value,
-        exaggeration: Number(elements.expressionRange.value) / 100,
-        cfg_weight: Number(elements.fidelityRange.value) / 100,
-        seed: 0,
-        consent: elements.consentCheckbox.checked,
-      }),
-    });
-    state.history.unshift(entry); renderHistory();
-    elements.progressLabel.textContent = "Speech generated";
+    const previousHistory = [...state.history];
+    const generated = [];
+    for (let index = 0; index < scripts.length; index += 1) {
+      elements.progressLabel.textContent = `Generating phase ${index + 1} of ${scripts.length}`;
+      const entry = await api("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          voice_id: state.selectedVoiceId,
+          text: scripts[index],
+          model: elements.modelSelect.value,
+          language: elements.languageSelect.value,
+          exaggeration: Number(elements.expressionRange.value) / 100,
+          cfg_weight: Number(elements.fidelityRange.value) / 100,
+          seed: 0,
+          consent: elements.consentCheckbox.checked,
+        }),
+      });
+      generated.push(entry);
+      state.history = [...generated, ...previousHistory];
+      renderHistory();
+    }
+    elements.progressLabel.textContent = `${scripts.length} ${scripts.length === 1 ? "phase" : "phases"} generated`;
     const firstAudio = elements.historyList.querySelector("audio");
     if (firstAudio) await firstAudio.play().catch(() => {});
     setTimeout(() => { elements.generationProgress.hidden = true; }, 1100);
@@ -319,7 +336,7 @@ async function initialise() {
   }
 }
 
-elements.scriptInput.addEventListener("input", updateScriptStats);
+elements.scriptInputs.forEach((input) => input.addEventListener("input", updateScriptStats));
 elements.consentCheckbox.addEventListener("change", updateGenerateState);
 elements.expressionRange.addEventListener("input", () => { elements.expressionValue.textContent = elements.expressionRange.value; });
 elements.fidelityRange.addEventListener("input", () => { elements.fidelityValue.textContent = elements.fidelityRange.value; });

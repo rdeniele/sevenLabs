@@ -6,6 +6,7 @@ A private, local-first voice cloning studio powered by [Chatterbox](https://gith
 
 - Records a voice sample in the browser or accepts WAV, MP3, M4A, FLAC, OGG, and WebM files.
 - Keeps voice samples and generated audio in the local `data/` folder.
+- Queues up to three script phases from one click and generates them in order.
 - Offers three local models:
   - **Nano**: English, lowest memory use, recommended for CPU and 4 GB GPUs.
   - **Turbo**: English, faster high-quality generation with speech tags such as `[laugh]`.
@@ -34,8 +35,9 @@ The setup script installs Python 3.11 with `winget` if needed, creates an isolat
 1. Double-click **`SevenLabs.cmd`** and wait for the browser to open.
 2. Under **Voice source**, choose **Record sample** or **Upload audio**.
 3. Give the voice a name and confirm that you own it or have permission to clone it.
-4. Write your script, choose a model, and confirm the generation permission checkbox.
-5. Select **Generate speech**. Play or download the resulting WAV under **Recent generations**.
+4. Write the first part in **Phase 1**. Optionally add **Phase 2** and **Phase 3** before generation starts.
+5. Choose a model and confirm the generation permission checkbox.
+6. Select **Generate phases**. SevenLabs processes each non-empty phase in order; play or download the resulting WAV files under **Recent generations**.
 
 The first generation with a new model takes longer because its weights must download and load into memory. Later generations reuse the local cache.
 
