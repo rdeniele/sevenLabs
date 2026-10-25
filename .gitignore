@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/voices/*
+data/outputs/*
+data/models/*
+!data/voices/.gitkeep
+!data/outputs/.gitkeep
+!data/models/.gitkeep
+
