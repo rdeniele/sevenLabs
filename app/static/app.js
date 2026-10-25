@@ -82,7 +82,9 @@ function updateGenerateState() {
   const hasText = scripts.length > 0;
   const hasConsent = elements.consentCheckbox.checked;
   elements.generateButton.disabled = state.generating || !hasVoice || !hasText || !hasConsent;
-  elements.generateLabel.textContent = scripts.length > 1 ? `Generate ${scripts.length} phases` : "Generate speech";
+  if (scripts.length > 1) elements.generateLabel.textContent = `Generate ${scripts.length} phases`;
+  else if (scripts.length === 1) elements.generateLabel.textContent = "Generate 1 phase";
+  else elements.generateLabel.textContent = "Generate queued phases";
 
   if (state.generating) elements.generationHint.textContent = "Your queued phases will continue automatically.";
   else if (!hasVoice) elements.generationHint.textContent = "Add or select a voice sample to begin.";

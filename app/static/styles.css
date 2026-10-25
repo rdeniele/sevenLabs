@@ -127,7 +127,8 @@ h2 { margin: 0; font-size: 21px; line-height: 1.2; letter-spacing: -0.035em; fon
 
 .model-select-wrap { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
 select { color: var(--muted-strong); border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 30px 9px 10px; }
-.phase-stack { display: grid; gap: 12px; margin-top: 26px; }
+.queue-instruction { margin: 18px 0 0; max-width: 58ch; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.phase-stack { display: grid; gap: 12px; margin-top: 16px; }
 .script-field { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: #141512; transition: 160ms ease; }
 .script-field:focus-within { border-color: rgba(185, 239, 90, 0.62); box-shadow: 0 0 0 3px rgba(185, 239, 90, 0.07); }
 .phase-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 0; }
@@ -136,20 +137,20 @@ select { color: var(--muted-strong); border: 1px solid var(--line); background: 
 textarea { width: 100%; min-height: 118px; padding: 14px 18px; resize: vertical; color: var(--text); caret-color: var(--accent); border: 0; outline: 0; background: transparent; line-height: 1.6; font-size: 15px; }
 textarea::placeholder { color: #6f746a; }
 .script-meta { display: flex; justify-content: space-between; padding: 0 18px 15px; color: var(--muted); font: 500 10px/1 ui-monospace, "Cascadia Code", monospace; }
-.controls-row { display: grid; grid-template-columns: 0.8fr 1fr 1fr; gap: 22px; margin-top: 24px; }
+.controls-row { display: grid; grid-template-columns: 0.8fr 1fr 1fr; gap: 22px; margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line); }
 .select-field, .range-field { display: grid; gap: 9px; color: var(--muted); font-size: 11px; }
 .select-field select { width: 100%; min-height: 39px; }
 .range-field > span { display: flex; justify-content: space-between; }
 .range-field output { color: var(--accent); font-family: ui-monospace, "Cascadia Code", monospace; }
 input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
-.consent-row { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--line); }
+.consent-row { margin-top: 20px; }
 .check-field { display: inline-flex; align-items: flex-start; gap: 10px; color: var(--muted-strong); cursor: pointer; font-size: 12px; line-height: 1.45; }
 .check-field input { position: absolute; opacity: 0; pointer-events: none; }
 .custom-check { position: relative; flex: 0 0 17px; height: 17px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); }
 .check-field input:checked + .custom-check { border-color: var(--accent); background: var(--accent); }
 .check-field input:checked + .custom-check::after { content: ""; position: absolute; width: 7px; height: 4px; left: 4px; top: 4px; border-left: 2px solid var(--accent-ink); border-bottom: 2px solid var(--accent-ink); transform: rotate(-45deg); }
 .check-field input:focus-visible + .custom-check { outline: 2px solid var(--accent); outline-offset: 3px; }
-.generate-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 24px; }
+.generate-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 16px; }
 .generate-row p { margin: 0; color: var(--muted); font-size: 11px; }
 .generate-button { min-width: 210px; color: var(--accent-ink); background: var(--accent); }
 .key-hint { margin-left: 4px; padding: 3px 6px; border: 1px solid rgba(19, 24, 12, 0.25); border-radius: 5px; font: 600 9px/1 ui-monospace, monospace; }

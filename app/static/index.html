@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#10110f" />
     <title>SevenLabs</title>
     <link rel="icon" type="image/png" href="/assets/sevenlabs-logo.png?v=1" />
-    <link rel="stylesheet" href="/assets/styles.css?v=2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=3" />
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -85,6 +85,8 @@
             </div>
           </div>
 
+          <p class="queue-instruction">Fill any phase you need. One click generates every non-empty phase in order.</p>
+
           <div class="phase-stack" aria-label="Speech phase queue">
             <div class="script-field">
               <div class="phase-heading"><strong>Phase 1</strong><span>Start here</span></div>
@@ -110,6 +112,23 @@
                 <span data-character-count>0 / 5,000</span>
               </div>
             </div>
+          </div>
+
+          <div class="consent-row">
+            <label class="check-field">
+              <input id="consentCheckbox" type="checkbox" />
+              <span class="custom-check" aria-hidden="true"></span>
+              <span>I confirm this is my voice or I have permission to use it.</span>
+            </label>
+          </div>
+
+          <div class="generate-row">
+            <p id="generationHint">Add a voice sample and script to begin.</p>
+            <button class="button generate-button" id="generateButton" type="button" disabled>
+              <span class="spark-icon" aria-hidden="true">✦</span>
+              <span id="generateLabel">Generate queued phases</span>
+              <span class="key-hint" aria-hidden="true">Ctrl ↵</span>
+            </button>
           </div>
 
           <div class="controls-row">
@@ -142,23 +161,6 @@
               <span><span>Voice fidelity</span><output id="fidelityValue">50</output></span>
               <input id="fidelityRange" type="range" min="0" max="100" value="50" />
             </label>
-          </div>
-
-          <div class="consent-row">
-            <label class="check-field">
-              <input id="consentCheckbox" type="checkbox" />
-              <span class="custom-check" aria-hidden="true"></span>
-              <span>I confirm this is my voice or I have permission to use it.</span>
-            </label>
-          </div>
-
-          <div class="generate-row">
-            <p id="generationHint">Add a voice sample and script to begin.</p>
-            <button class="button generate-button" id="generateButton" type="button" disabled>
-              <span class="spark-icon" aria-hidden="true">✦</span>
-              <span id="generateLabel">Generate speech</span>
-              <span class="key-hint" aria-hidden="true">Ctrl ↵</span>
-            </button>
           </div>
 
           <div class="generation-progress" id="generationProgress" hidden aria-live="polite">
@@ -248,7 +250,7 @@
       </article>
     </template>
 
-    <script src="/assets/app.js" defer></script>
+    <script src="/assets/app.js?v=2" defer></script>
   </body>
 </html>
 
