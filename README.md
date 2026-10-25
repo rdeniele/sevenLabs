@@ -1,4 +1,4 @@
-# Local Voice Studio
+# SevenLabs
 
 A private, local-first voice cloning studio powered by [Chatterbox](https://github.com/resemble-ai/chatterbox). Record or upload a short voice sample, type a script, and generate watermarked speech on your own computer. The engine is pinned to an exact official commit so Nano support and future package changes cannot silently break the app.
 
@@ -15,7 +15,7 @@ A private, local-first voice cloning studio powered by [Chatterbox](https://gith
 
 ## Windows quick start
 
-After the initial setup, double-click **`Local Voice Studio.cmd`**. Keep its small terminal window open while using the app; closing that window stops the private local server.
+After the initial setup, double-click **`SevenLabs.cmd`**. Keep its small terminal window open while using the app; closing that window stops the private local server.
 
 For the initial setup, you can also double-click the launcher and let it run setup automatically. Or open PowerShell in this folder and run:
 
@@ -31,7 +31,7 @@ The setup script installs Python 3.11 with `winget` if needed, creates an isolat
 
 ## How to use the app
 
-1. Double-click **`Local Voice Studio.cmd`** and wait for the browser to open.
+1. Double-click **`SevenLabs.cmd`** and wait for the browser to open.
 2. Under **Voice source**, choose **Record sample** or **Upload audio**.
 3. Give the voice a name and confirm that you own it or have permission to clone it.
 4. Write your script, choose a model, and confirm the generation permission checkbox.

@@ -55,12 +55,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-bottom: 1px solid var(--line);
 }
 
-.brand { display: inline-flex; align-items: center; gap: 12px; color: var(--text); text-decoration: none; font-weight: 680; letter-spacing: -0.02em; }
-.brand-mark { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; gap: 2px; border: 1px solid var(--line-strong); border-radius: 8px; }
-.brand-mark i { display: block; width: 2px; border-radius: 2px; background: var(--accent); }
-.brand-mark i:nth-child(1), .brand-mark i:nth-child(5) { height: 6px; }
-.brand-mark i:nth-child(2), .brand-mark i:nth-child(4) { height: 12px; }
-.brand-mark i:nth-child(3) { height: 18px; }
+.brand { display: inline-flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; font-weight: 680; letter-spacing: -0.02em; }
+.brand-logo { width: 30px; height: 30px; object-fit: contain; display: block; }
 
 .system-state { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .state-light { width: 7px; height: 7px; border-radius: 50%; background: #e2ae52; box-shadow: 0 0 0 4px rgba(226, 174, 82, 0.1); }

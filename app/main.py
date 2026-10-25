@@ -210,7 +210,7 @@ class VoiceEngine:
 
 
 engine = VoiceEngine()
-app = FastAPI(title="Local Voice Studio", docs_url=None, redoc_url=None)
+app = FastAPI(title="SevenLabs", docs_url=None, redoc_url=None)
 
 
 class GenerateRequest(BaseModel):

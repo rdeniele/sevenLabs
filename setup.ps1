@@ -79,7 +79,7 @@ if ($hasNvidia) {
     Assert-LastCommand "Could not install the CPU build of PyTorch."
 }
 
-Write-Host "Installing Local Voice Studio..." -ForegroundColor Cyan
+Write-Host "Installing SevenLabs..." -ForegroundColor Cyan
 & $venvPython -m pip install -r requirements.txt
 Assert-LastCommand "Could not install the app dependencies."
 
