@@ -39,7 +39,7 @@ def test_strict_reading_options_reduce_sampling_randomness() -> None:
 
 def test_long_trailing_silence_is_trimmed() -> None:
     spoken = torch.full((1, 2_000), 0.1)
-    silence = torch.zeros((1, 3_000))
+    silence = torch.full((1, 3_000), 0.0001)
     trimmed = main.VoiceEngine._trim_trailing_silence(
         torch.cat((spoken, silence), dim=-1),
         sample_rate=1_000,

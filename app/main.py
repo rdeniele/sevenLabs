@@ -168,7 +168,44 @@ class VoiceEngine:
         return {key: value for key, value in values.items() if key in signature.parameters}
 
     @staticmethod
+    def _speech_end_sample(
+        wave: Any,
+        sample_rate: int,
+        threshold: float = 0.001,
+        frame_seconds: float = 0.1,
+    ) -> int:
+        """Find the end of audible speech using frame RMS, ignoring watermark noise."""
+        activity = wave.float()
+        if getattr(activity, "ndim", 1) > 1:
+            activity = activity.pow(2).mean(dim=0).sqrt()
+        else:
+            activity = activity.abs()
+
+        total_samples = int(activity.shape[-1])
+        if total_samples == 0:
+            return 0
+        frame_samples = max(1, int(sample_rate * frame_seconds))
+        complete_frames = total_samples // frame_samples
+        last_active_end = 0
+
+        if complete_frames:
+            framed = activity[: complete_frames * frame_samples].reshape(complete_frames, frame_samples)
+            frame_rms = framed.pow(2).mean(dim=1).sqrt()
+            active_frames = (frame_rms > threshold).nonzero(as_tuple=False).flatten()
+            if active_frames.numel():
+                last_active_end = (int(active_frames[-1].item()) + 1) * frame_samples
+
+        remainder_start = complete_frames * frame_samples
+        if remainder_start < total_samples:
+            remainder_rms = activity[remainder_start:].pow(2).mean().sqrt()
+            if float(remainder_rms.item()) > threshold:
+                last_active_end = total_samples
+
+        return last_active_end
+
+    @classmethod
     def _trim_trailing_silence(
+        cls,
         wave: Any,
         sample_rate: int,
         threshold: float = 0.001,
@@ -176,30 +213,20 @@ class VoiceEngine:
         keep_seconds: float = 0.35,
     ) -> Any:
         """Remove a long silent tail while preserving natural sentence room."""
-        activity = wave.abs()
-        if getattr(activity, "ndim", 1) > 1:
-            activity = activity.amax(dim=0)
-        active_samples = (activity > threshold).nonzero(as_tuple=False).flatten()
-        if active_samples.numel() == 0:
+        speech_end = cls._speech_end_sample(wave, sample_rate, threshold)
+        if speech_end == 0:
             return wave
 
-        last_active = int(active_samples[-1].item())
-        tail_samples = wave.shape[-1] - last_active - 1
+        tail_samples = wave.shape[-1] - speech_end
         if tail_samples <= int(sample_rate * minimum_tail_seconds):
             return wave
 
-        end = min(wave.shape[-1], last_active + 1 + int(sample_rate * keep_seconds))
+        end = min(wave.shape[-1], speech_end + int(sample_rate * keep_seconds))
         return wave[..., :end]
 
-    @staticmethod
-    def _spoken_seconds(wave: Any, sample_rate: int, threshold: float = 0.001) -> float:
-        activity = wave.abs()
-        if getattr(activity, "ndim", 1) > 1:
-            activity = activity.amax(dim=0)
-        active_samples = (activity > threshold).nonzero(as_tuple=False).flatten()
-        if active_samples.numel() == 0:
-            return 0.0
-        return float((int(active_samples[-1].item()) + 1) / sample_rate)
+    @classmethod
+    def _spoken_seconds(cls, wave: Any, sample_rate: int, threshold: float = 0.001) -> float:
+        return float(cls._speech_end_sample(wave, sample_rate, threshold) / sample_rate)
 
     @classmethod
     def _needs_silence_retry(cls, wave: Any, sample_rate: int, text: str) -> bool:
@@ -248,8 +275,10 @@ class VoiceEngine:
 
                 used_seed = seed
                 wave = generate_once(used_seed)
-                if self._needs_silence_retry(wave, handle.model.sr, text):
-                    retry_seed = (seed + 1) % (2**32)
+                for offset in (1, 2):
+                    if not self._needs_silence_retry(wave, handle.model.sr, text):
+                        break
+                    retry_seed = (seed + offset) % (2**32)
                     retry_wave = generate_once(retry_seed)
                     if self._spoken_seconds(retry_wave, handle.model.sr) > self._spoken_seconds(wave, handle.model.sr):
                         wave = retry_wave
