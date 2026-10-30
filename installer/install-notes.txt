@@ -1,0 +1,11 @@
+SevenLabs runs privately on your Windows computer.
+
+Before you continue:
+
+• The first launch requires an internet connection.
+• Python, PyTorch, Chatterbox, Whisper, and model files are downloaded during first-time setup.
+• Allow several gigabytes of free disk space and several minutes for setup.
+• Voice samples, generated audio, settings, and downloaded models stay in your local user data folder.
+• Only clone a voice that you own or have explicit permission to use.
+
+After setup, previously downloaded models can be used offline.

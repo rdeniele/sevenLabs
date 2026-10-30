@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import wave
+from pathlib import Path
 
 import pytest
 import torch
@@ -27,6 +28,49 @@ def test_health_reports_local_engine() -> None:
     assert body["engine"]["installed"] is True
     assert body["engine"]["device"] in {"cpu", "cuda"}
     assert body["models"] == ["nano", "turbo", "multilingual"]
+    assert "transcriber" in body
+
+
+def test_long_script_is_split_at_sentence_boundaries_without_rewriting() -> None:
+    sentences = [f"Sentence {index} has enough words to sound natural when spoken aloud." for index in range(1, 18)]
+    script = " ".join(sentences)
+    chunks = main.split_script(script, target_words=30, max_words=40, max_chars=300)
+    assert len(chunks) > 1
+    assert " ".join(chunks) == script
+    assert all(len(chunk.split()) <= 40 for chunk in chunks)
+
+
+def test_oversized_sentence_is_split_without_losing_words() -> None:
+    script = " ".join(f"word{index}" for index in range(205))
+    chunks = main.split_script(script, target_words=70, max_words=90, max_chars=560)
+    assert len(chunks) >= 3
+    assert " ".join(chunks) == script
+    assert all(len(chunk.split()) <= 90 for chunk in chunks)
+
+
+def test_oversized_clause_is_split_without_losing_words() -> None:
+    first_clause = " ".join(f"first{index}" for index in range(120)) + ","
+    second_clause = " ".join(f"second{index}" for index in range(20)) + "."
+    script = f"{first_clause} {second_clause}"
+    chunks = main.split_script(script, target_words=50, max_words=60, max_chars=420)
+    assert " ".join(chunks) == script
+    assert all(len(chunk.split()) <= 60 for chunk in chunks)
+
+
+def test_wav_chunks_are_joined_with_a_pause(tmp_path: Path) -> None:
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    output = tmp_path / "combined.wav"
+    for path in (first, second):
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(1_000)
+            wav.writeframes(b"\x01\x00" * 1_000)
+    duration = main.combine_wav_files([first, second], output, pause_seconds=0.25)
+    assert duration == 2.25
+    with wave.open(str(output), "rb") as combined:
+        assert combined.getnframes() == 2_250
 
 
 def test_strict_reading_options_reduce_sampling_randomness() -> None:
@@ -98,3 +142,24 @@ def test_generation_requires_permission_before_model_load() -> None:
     with pytest.raises(HTTPException) as raised:
         asyncio.run(main.generate(payload))
     assert raised.value.status_code == 400
+
+
+def test_output_folder_setting_is_created_and_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings_file = tmp_path / "settings.json"
+    chosen_folder = tmp_path / "exports" / "sevenlabs"
+    monkeypatch.setattr(main, "SETTINGS_FILE", settings_file)
+    result = asyncio.run(main.set_output_folder(main.OutputFolderRequest(path=str(chosen_folder))))
+    assert chosen_folder.is_dir()
+    assert result["path"] == str(chosen_folder)
+    assert asyncio.run(main.get_output_folder())["path"] == str(chosen_folder)
+
+
+def test_output_audio_path_uses_configured_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings_file = tmp_path / "settings.json"
+    chosen_folder = tmp_path / "finished"
+    settings_file.write_text('{"output_folder": "' + str(chosen_folder).replace("\\", "\\\\") + '"}', encoding="utf-8")
+    monkeypatch.setattr(main, "SETTINGS_FILE", settings_file)
+    path = main.output_audio_path("1234567890abcdef", "My Voice")
+    assert path.parent == chosen_folder
+    assert path.name.startswith("SevenLabs-My-Voice-")
+    assert path.name.endswith("-12345678.wav")

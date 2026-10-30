@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -27,9 +28,15 @@ DATA_DIR = ROOT / "data"
 VOICES_DIR = DATA_DIR / "voices"
 OUTPUTS_DIR = DATA_DIR / "outputs"
 MODELS_DIR = DATA_DIR / "models"
+SETTINGS_FILE = DATA_DIR / "settings.json"
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MAX_SCRIPT_CHARS = 5_000
+MAX_SCRIPT_CHARS = 50_000
+MAX_TRANSCRIPTION_BYTES = 500 * 1024 * 1024
+CHUNK_TARGET_WORDS = 70
+CHUNK_MAX_WORDS = 90
+CHUNK_MAX_CHARS = 560
+CHUNK_PAUSE_SECONDS = 0.28
 STRICT_READING_OPTIONS = {
     # Stay close to Chatterbox's tuned defaults. Aggressive filtering can make
     # Nano select silence tokens for the rest of an otherwise valid take.
@@ -65,6 +72,24 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def output_folder() -> Path:
+    configured = str(read_json(SETTINGS_FILE).get("output_folder") or "").strip()
+    return Path(configured) if configured else OUTPUTS_DIR
+
+
+def output_audio_path(output_id: str, voice_name: str) -> Path:
+    folder = output_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"SevenLabs-{safe_name(voice_name, 'voice').replace(' ', '-')}-{timestamp}-{output_id[:8]}.wav"
+    return folder / filename
+
+
+def record_audio_path(record: dict[str, Any], output_id: str) -> Path:
+    stored = record.get("audio_path")
+    return Path(stored) if stored else OUTPUTS_DIR / f"{output_id}.wav"
 
 
 def public_voice(record: dict[str, Any]) -> dict[str, Any]:
@@ -301,7 +326,173 @@ class VoiceEngine:
                 raise
 
 
+class TranscriptionEngine:
+    def __init__(self) -> None:
+        self._model: Any | None = None
+        self._device: str | None = None
+        self._load_lock = threading.Lock()
+        self._transcribe_lock = threading.Lock()
+
+    @staticmethod
+    def installed() -> bool:
+        return importlib.util.find_spec("faster_whisper") is not None
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "installed": self.installed(),
+            "loaded": self._model is not None,
+            "device": self._device or VoiceEngine.detected_device(),
+        }
+
+    def _load(self) -> Any:
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
+            if not self.installed():
+                raise RuntimeError("The transcriber is not installed. Run setup.ps1 again.")
+
+            from faster_whisper import WhisperModel
+
+            device = "cuda" if VoiceEngine.device_for_model("nano") == "cuda" else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            self._model = WhisperModel(
+                "base",
+                device=device,
+                compute_type=compute_type,
+                download_root=str(MODELS_DIR / "faster-whisper"),
+            )
+            self._device = device
+            return self._model
+
+    def transcribe(self, audio_path: Path, language: str | None = None) -> dict[str, Any]:
+        with self._transcribe_lock:
+            model = self._load()
+            segments, info = model.transcribe(
+                str(audio_path),
+                language=language or None,
+                beam_size=5,
+                vad_filter=True,
+                condition_on_previous_text=True,
+            )
+            rows = []
+            text_parts = []
+            for segment in segments:
+                text = segment.text.strip()
+                if not text:
+                    continue
+                rows.append({"start": round(segment.start, 2), "end": round(segment.end, 2), "text": text})
+                text_parts.append(text)
+            return {
+                "text": " ".join(text_parts).strip(),
+                "language": info.language,
+                "language_probability": round(info.language_probability, 3),
+                "duration_seconds": round(info.duration, 2),
+                "segments": rows,
+                "device": self._device,
+            }
+
+
+def _split_oversized_text(text: str, max_words: int, max_chars: int) -> list[str]:
+    """Split a long sentence at clauses, then words, without rewriting it."""
+    clauses = [part.strip() for part in re.split(r"(?<=[,;:—–])\s+", text) if part.strip()]
+    if len(clauses) == 1:
+        words = text.split()
+        chunks: list[str] = []
+        current: list[str] = []
+        for word in words:
+            candidate = " ".join((*current, word))
+            if current and (len(current) >= max_words or len(candidate) > max_chars):
+                chunks.append(" ".join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            chunks.append(" ".join(current))
+        return chunks
+
+    chunks = []
+    current = ""
+    for clause in clauses:
+        if len(clause.split()) > max_words or len(clause) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_oversized_text(clause, max_words, max_chars))
+            continue
+        candidate = f"{current} {clause}".strip()
+        if current and (len(candidate.split()) > max_words or len(candidate) > max_chars):
+            chunks.append(current)
+            current = clause
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def split_script(
+    text: str,
+    target_words: int = CHUNK_TARGET_WORDS,
+    max_words: int = CHUNK_MAX_WORDS,
+    max_chars: int = CHUNK_MAX_CHARS,
+) -> list[str]:
+    """Create model-safe chunks at natural boundaries while preserving all words."""
+    normalized = re.sub(r"[ \t]+", " ", text.strip())
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    if not normalized:
+        return []
+
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"'”’)])\s+|\n+", normalized) if part.strip()]
+    units: list[str] = []
+    for sentence in sentences:
+        if len(sentence.split()) > max_words or len(sentence) > max_chars:
+            units.extend(_split_oversized_text(sentence, max_words, max_chars))
+        else:
+            units.append(sentence)
+
+    chunks: list[str] = []
+    current = ""
+    for unit in units:
+        candidate = f"{current} {unit}".strip()
+        candidate_words = len(candidate.split())
+        if current and (candidate_words > max_words or len(candidate) > max_chars or len(current.split()) >= target_words):
+            chunks.append(current)
+            current = unit
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def combine_wav_files(paths: list[Path], output_path: Path, pause_seconds: float = CHUNK_PAUSE_SECONDS) -> float:
+    import torch
+    import torchaudio as ta
+
+    waves = []
+    sample_rate: int | None = None
+    for path in paths:
+        wave, rate = ta.load(str(path))
+        if sample_rate is None:
+            sample_rate = rate
+        elif rate != sample_rate:
+            wave = ta.functional.resample(wave, rate, sample_rate)
+        waves.append(wave)
+    if not waves or sample_rate is None:
+        raise RuntimeError("No generated audio was available to combine.")
+    pause = torch.zeros((waves[0].shape[0], int(sample_rate * pause_seconds)))
+    combined_parts = []
+    for index, wave in enumerate(waves):
+        if index:
+            combined_parts.append(pause)
+        combined_parts.append(wave)
+    combined = torch.cat(combined_parts, dim=-1)
+    ta.save(str(output_path), combined, sample_rate, encoding="PCM_S", bits_per_sample=16)
+    return round(combined.shape[-1] / sample_rate, 2)
+
+
 engine = VoiceEngine()
+transcriber = TranscriptionEngine()
 app = FastAPI(title="SevenLabs", docs_url=None, redoc_url=None)
 
 
@@ -316,9 +507,54 @@ class GenerateRequest(BaseModel):
     consent: bool
 
 
+class ChunkPreviewRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_SCRIPT_CHARS)
+
+
+class OutputFolderRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=1_000)
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "engine": engine.status(), "models": ["nano", "turbo", "multilingual"]}
+    return {
+        "ok": True,
+        "engine": engine.status(),
+        "transcriber": transcriber.status(),
+        "models": ["nano", "turbo", "multilingual"],
+    }
+
+
+@app.post("/api/chunks")
+async def preview_chunks(request: ChunkPreviewRequest) -> dict[str, Any]:
+    chunks = split_script(request.text)
+    return {
+        "count": len(chunks),
+        "chunks": [{"number": index + 1, "words": len(chunk.split()), "text": chunk} for index, chunk in enumerate(chunks)],
+    }
+
+
+@app.get("/api/settings/output-folder")
+async def get_output_folder() -> dict[str, str]:
+    return {"path": str(output_folder())}
+
+
+@app.put("/api/settings/output-folder")
+async def set_output_folder(request: OutputFolderRequest) -> dict[str, str]:
+    raw_path = os.path.expandvars(request.path.strip().strip('"'))
+    folder = Path(raw_path).expanduser()
+    if not folder.is_absolute():
+        folder = (ROOT / folder).resolve()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        if not folder.is_dir():
+            raise OSError("The selected location is not a folder.")
+        with tempfile.NamedTemporaryFile(prefix=".sevenlabs-", dir=folder):
+            pass
+    except OSError as error:
+        raise HTTPException(400, f"SevenLabs cannot write to that folder: {error}") from error
+    write_json(SETTINGS_FILE, {"output_folder": str(folder)})
+    return {"path": str(folder)}
 
 
 @app.get("/api/voices")
@@ -410,7 +646,7 @@ async def generate(request: GenerateRequest) -> dict[str, Any]:
         raise HTTPException(404, "The reference audio for this voice is missing.")
 
     output_id = uuid.uuid4().hex
-    output_path = OUTPUTS_DIR / f"{output_id}.wav"
+    output_path = output_audio_path(output_id, voice_record["name"])
     seed = request.seed or int.from_bytes(os.urandom(4), "little")
 
     try:
@@ -444,28 +680,131 @@ async def generate(request: GenerateRequest) -> dict[str, Any]:
         "watermarked": True,
         "audio_url": f"/api/audio/{output_id}",
         "download_url": f"/api/audio/{output_id}?download=1",
+        "audio_path": str(output_path),
     }
     write_json(OUTPUTS_DIR / f"{output_id}.json", record)
     return record
 
 
+@app.post("/api/generate-long")
+async def generate_long(request: GenerateRequest) -> dict[str, Any]:
+    if not request.consent:
+        raise HTTPException(400, "Consent confirmation is required.")
+
+    voice_dir = VOICES_DIR / safe_name(request.voice_id, "invalid")
+    voice_record = read_json(voice_dir / "voice.json")
+    if not voice_record:
+        raise HTTPException(404, "Voice not found")
+    reference_path = voice_dir / voice_record["reference_file"]
+    if not reference_path.exists():
+        raise HTTPException(404, "The reference audio for this voice is missing.")
+
+    script = request.text.strip()
+    chunks = split_script(script)
+    if not chunks:
+        raise HTTPException(400, "Write a script before generating.")
+
+    output_id = uuid.uuid4().hex
+    output_path = output_audio_path(output_id, voice_record["name"])
+    base_seed = request.seed or int.from_bytes(os.urandom(4), "little")
+    devices: set[str] = set()
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="sevenlabs-") as temp_dir:
+            chunk_paths = []
+            used_seeds = []
+            for index, chunk in enumerate(chunks):
+                chunk_path = Path(temp_dir) / f"chunk-{index:04d}.wav"
+                result = await asyncio.to_thread(
+                    engine.generate,
+                    request.model,
+                    chunk,
+                    reference_path,
+                    chunk_path,
+                    request.language,
+                    request.exaggeration,
+                    request.cfg_weight,
+                    (base_seed + index) % (2**31 - 1),
+                )
+                chunk_paths.append(chunk_path)
+                used_seeds.append(result["seed"])
+                devices.add(result["device"])
+            duration = await asyncio.to_thread(combine_wav_files, chunk_paths, output_path)
+    except Exception as error:
+        output_path.unlink(missing_ok=True)
+        raise HTTPException(500, str(error)) from error
+
+    record = {
+        "id": output_id,
+        "voice_id": request.voice_id,
+        "voice_name": voice_record["name"],
+        "text": script,
+        "model": request.model,
+        "language": request.language,
+        "seed": base_seed,
+        "chunk_seeds": used_seeds,
+        "chunk_count": len(chunks),
+        "created_at": now_iso(),
+        "duration_seconds": duration,
+        "device": ", ".join(sorted(devices)),
+        "synthetic": True,
+        "watermarked": True,
+        "long_form": True,
+        "audio_url": f"/api/audio/{output_id}",
+        "download_url": f"/api/audio/{output_id}?download=1",
+        "audio_path": str(output_path),
+    }
+    write_json(OUTPUTS_DIR / f"{output_id}.json", record)
+    return record
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(
+    audio: UploadFile = File(...),
+    language: str = Form(default="auto"),
+) -> dict[str, Any]:
+    suffix = Path(audio.filename or "audio.wav").suffix.lower()
+    if suffix not in ALLOWED_AUDIO:
+        raise HTTPException(400, "Use a WAV, MP3, M4A, FLAC, OGG, AAC, or WebM audio file.")
+
+    temp_path = OUTPUTS_DIR / f"transcribe-{uuid.uuid4().hex}{suffix}"
+    total = 0
+    try:
+        with temp_path.open("wb") as destination:
+            while chunk := await audio.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_TRANSCRIPTION_BYTES:
+                    raise HTTPException(413, "The audio file is larger than 500 MB.")
+                destination.write(chunk)
+        if total < 1_024:
+            raise HTTPException(400, "The audio file is empty or too short.")
+        return await asyncio.to_thread(transcriber.transcribe, temp_path, None if language == "auto" else language)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(500, str(error)) from error
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 @app.get("/api/audio/{output_id}")
 async def audio(output_id: str, download: bool = False) -> FileResponse:
     output_id = safe_name(output_id, "invalid")
-    path = OUTPUTS_DIR / f"{output_id}.wav"
     metadata = read_json(OUTPUTS_DIR / f"{output_id}.json")
-    if not path.exists() or path.parent != OUTPUTS_DIR:
+    path = record_audio_path(metadata, output_id)
+    if not path.exists() or path.suffix.lower() != ".wav":
         raise HTTPException(404, "Audio not found")
 
-    filename = f"{safe_name(metadata.get('voice_name', 'voice'))}-{output_id[:8]}.wav"
+    filename = path.name
     return FileResponse(path, media_type="audio/wav", filename=filename if download else None)
 
 
 @app.delete("/api/history/{output_id}", status_code=204, response_class=Response)
 async def delete_output(output_id: str) -> Response:
     output_id = safe_name(output_id, "invalid")
-    audio_path = OUTPUTS_DIR / f"{output_id}.wav"
     metadata_path = OUTPUTS_DIR / f"{output_id}.json"
+    metadata = read_json(metadata_path)
+    audio_path = record_audio_path(metadata, output_id)
     if not audio_path.exists() and not metadata_path.exists():
         raise HTTPException(404, "Generation not found")
     audio_path.unlink(missing_ok=True)

@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
 .pytest_cache/
+build/
+dist/
+launcher/bin/
+launcher/obj/
 *.pyc
 data/voices/*
 data/outputs/*

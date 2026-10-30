@@ -3,254 +3,96 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#10110f" />
-    <title>SevenLabs</title>
+    <meta name="theme-color" content="#0d0e0c" />
+    <title>SevenLabs — Local voice studio</title>
     <link rel="icon" type="image/png" href="/assets/sevenlabs-logo.png?v=1" />
-    <link rel="stylesheet" href="/assets/styles.css?v=3" />
+    <link rel="stylesheet" href="/assets/styles.css?v=4" />
   </head>
   <body>
-    <div class="noise" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="#studio" aria-label="SevenLabs home">
-        <img class="brand-logo" src="/assets/sevenlabs-logo.png?v=1" width="30" height="30" alt="" aria-hidden="true" />
-        <span>SevenLabs</span>
-      </a>
-      <div class="system-state" id="systemState">
-        <span class="state-light" aria-hidden="true"></span>
-        <span id="systemText">Checking local engine</span>
+      <div class="brand" aria-label="SevenLabs">
+        <img src="/assets/sevenlabs-logo.png?v=1" width="32" height="32" alt="" />
+        <span>SevenLabs</span><small>Local voice studio</small>
       </div>
+      <div class="system-state" id="systemState"><span class="state-light" aria-hidden="true"></span><span id="systemText">Checking local engine</span></div>
     </header>
 
-    <main id="studio" class="shell">
-      <section class="intro" aria-labelledby="pageTitle">
-        <div>
-          <p class="eyebrow">Your voice. Your machine.</p>
-          <h1 id="pageTitle">Turn your words into <em>your voice.</em></h1>
+    <main class="studio-shell">
+      <aside class="panel voice-panel" aria-labelledby="voiceTitle">
+        <div class="panel-heading">
+          <div><h1 id="voiceTitle">Voice</h1><p>Choose who speaks.</p></div>
+          <button class="icon-button" id="addVoiceButton" type="button" aria-label="Add voice" title="Add voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
         </div>
-        <p class="intro-copy">Record a clean sample, write a script, and create private, watermarked speech without sending your voice to a cloud service.</p>
+        <div class="voice-list" id="voiceList" aria-live="polite"></div>
+        <div class="voice-empty" id="voiceEmpty">
+          <div class="wave-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <strong>Add your voice</strong><p>A clean 10–30 second sample works best.</p>
+          <button class="button button-primary" id="recordButton" type="button">Record sample</button>
+          <label class="button button-secondary" for="fileInput">Upload audio</label>
+          <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm,.aac" hidden />
+        </div>
+        <div class="voice-footer"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Voice samples never leave this computer.</span></div>
+      </aside>
+
+      <section class="panel script-panel" aria-labelledby="scriptTitle">
+        <div class="panel-heading script-heading">
+          <div><h1 id="scriptTitle">Script</h1><p>Write or paste everything you want your voice to say.</p></div>
+          <div class="script-stats" aria-live="polite"><strong id="wordCount">0</strong><span>words</span><i></i><strong id="chunkCount">0</strong><span>safe parts</span></div>
+        </div>
+        <div class="script-editor">
+          <textarea id="scriptInput" maxlength="50000" placeholder="Write your thoughts, narration, story, or full script here. SevenLabs will handle longer scripts automatically." aria-label="Speech script"></textarea>
+          <div class="editor-footer"><span id="splitMessage">Nothing will be rewritten or added.</span><span id="characterCount">0 / 50,000</span></div>
+        </div>
+        <div class="settings-bar">
+          <label><span>Model</span><select id="modelSelect"><option value="nano">Nano</option><option value="turbo">Turbo</option><option value="multilingual">Multilingual V3</option></select></label>
+          <label><span>Language</span><select id="languageSelect"><option value="en">English</option><option value="ms">Malay</option><option value="zh">Chinese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="pt">Portuguese</option><option value="it">Italian</option><option value="hi">Hindi</option><option value="ar">Arabic</option><option value="tr">Turkish</option><option value="ru">Russian</option><option value="nl">Dutch</option><option value="pl">Polish</option></select></label>
+          <label class="range-field"><span>Expression <output id="expressionValue">50</output></span><input id="expressionRange" type="range" min="0" max="100" value="50" /></label>
+          <label class="range-field"><span>Fidelity <output id="fidelityValue">50</output></span><input id="fidelityRange" type="range" min="0" max="100" value="50" /></label>
+        </div>
+        <div class="action-bar">
+          <label class="check-field"><input id="consentCheckbox" type="checkbox" /><span class="custom-check" aria-hidden="true"></span><span>I own this voice or have permission to use it.</span></label>
+          <button class="button generate-button" id="generateButton" type="button" disabled><span id="generateLabel">Generate full audio</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
+        </div>
+        <div class="generation-progress" id="generationProgress" hidden aria-live="polite"><div><strong id="progressLabel">Preparing long-form audio</strong><span id="progressTimer">0:00</span></div><div class="progress-track"><span></span></div><p>Parts are generated in order, then joined into one WAV automatically.</p></div>
+        <div class="error-banner" id="errorBanner" role="alert" hidden></div>
       </section>
 
-      <section class="workspace" aria-label="Voice generation studio">
-        <aside class="voice-panel">
-          <div class="panel-heading">
-            <div>
-              <span class="step-number">01</span>
-              <h2>Voice source</h2>
-            </div>
-            <button class="icon-button" id="addVoiceButton" type="button" aria-label="Add another voice" title="Add another voice">
-              <span aria-hidden="true">+</span>
-            </button>
-          </div>
-
-          <div class="voice-list" id="voiceList" aria-live="polite"></div>
-
-          <div class="voice-empty" id="voiceEmpty">
-            <div class="sample-orbit" aria-hidden="true">
-              <span class="orbit-ring"></span>
-              <span class="wave-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-            </div>
-            <h3>Give the studio a voice</h3>
-            <p>Use a clear 10-30 second sample. One speaker, no music, minimal room echo.</p>
-            <div class="source-actions">
-              <button class="button button-primary" id="recordButton" type="button">
-                <span class="button-icon record-icon" aria-hidden="true"></span>
-                Record sample
-              </button>
-              <label class="button button-secondary" for="fileInput">
-                Upload audio
-                <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm,.aac" hidden />
-              </label>
-            </div>
-          </div>
-
-          <div class="privacy-note">
-            <span class="lock-icon" aria-hidden="true"></span>
-            <span><strong>Private by default.</strong> Samples stay in this folder on your computer.</span>
-          </div>
-        </aside>
-
-        <section class="script-panel">
-          <div class="panel-heading">
-            <div>
-              <span class="step-number">02</span>
-              <h2>Script</h2>
-            </div>
-            <div class="model-select-wrap">
-              <label for="modelSelect">Model</label>
-              <select id="modelSelect">
-                <option value="nano">Nano, light</option>
-                <option value="turbo">Turbo, expressive</option>
-                <option value="multilingual">Multilingual V3</option>
-              </select>
-            </div>
-          </div>
-
-          <p class="queue-instruction">Fill any phase you need. One click generates every non-empty phase in order.</p>
-
-          <div class="phase-stack" aria-label="Speech phase queue">
-            <div class="script-field">
-              <div class="phase-heading"><strong>Phase 1</strong><span>Start here</span></div>
-              <textarea class="script-input" id="scriptInput" maxlength="5000" placeholder="Write the first 80–100 words..." aria-label="Speech script phase 1"></textarea>
-              <div class="script-meta">
-                <span data-word-count>0 words</span>
-                <span data-character-count>0 / 5,000</span>
-              </div>
-            </div>
-            <div class="script-field">
-              <div class="phase-heading"><strong>Phase 2</strong><span>Optional</span></div>
-              <textarea class="script-input" maxlength="5000" placeholder="Add the next part while Phase 1 generates..." aria-label="Speech script phase 2"></textarea>
-              <div class="script-meta">
-                <span data-word-count>0 words</span>
-                <span data-character-count>0 / 5,000</span>
-              </div>
-            </div>
-            <div class="script-field">
-              <div class="phase-heading"><strong>Phase 3</strong><span>Optional</span></div>
-              <textarea class="script-input" maxlength="5000" placeholder="Add a final part to the queue..." aria-label="Speech script phase 3"></textarea>
-              <div class="script-meta">
-                <span data-word-count>0 words</span>
-                <span data-character-count>0 / 5,000</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="consent-row">
-            <label class="check-field">
-              <input id="consentCheckbox" type="checkbox" />
-              <span class="custom-check" aria-hidden="true"></span>
-              <span>I confirm this is my voice or I have permission to use it.</span>
-            </label>
-          </div>
-
-          <div class="generate-row">
-            <p id="generationHint">Add a voice sample and script to begin.</p>
-            <button class="button generate-button" id="generateButton" type="button" disabled>
-              <span class="spark-icon" aria-hidden="true">✦</span>
-              <span id="generateLabel">Generate queued phases</span>
-              <span class="key-hint" aria-hidden="true">Ctrl ↵</span>
-            </button>
-          </div>
-
-          <div class="controls-row">
-            <label class="select-field">
-              <span>Language</span>
-              <select id="languageSelect">
-                <option value="en">English</option>
-                <option value="ms">Malay</option>
-                <option value="zh">Chinese</option>
-                <option value="ja">Japanese</option>
-                <option value="ko">Korean</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="pt">Portuguese</option>
-                <option value="it">Italian</option>
-                <option value="hi">Hindi</option>
-                <option value="ar">Arabic</option>
-                <option value="tr">Turkish</option>
-                <option value="ru">Russian</option>
-                <option value="nl">Dutch</option>
-                <option value="pl">Polish</option>
-              </select>
-            </label>
-            <label class="range-field">
-              <span><span>Expression</span><output id="expressionValue">50</output></span>
-              <input id="expressionRange" type="range" min="0" max="100" value="50" />
-            </label>
-            <label class="range-field">
-              <span><span>Voice fidelity</span><output id="fidelityValue">50</output></span>
-              <input id="fidelityRange" type="range" min="0" max="100" value="50" />
-            </label>
-          </div>
-
-          <div class="generation-progress" id="generationProgress" hidden aria-live="polite">
-            <div class="progress-header">
-              <span id="progressLabel">Loading the local model</span>
-              <span id="progressTimer">0:00</span>
-            </div>
-            <div class="progress-track"><span></span></div>
-            <p>Queued phases generate in order so the local model stays stable.</p>
-          </div>
-
-          <div class="error-banner" id="errorBanner" role="alert" hidden></div>
+      <aside class="utility-column">
+        <section class="panel transcriber-panel" aria-labelledby="transcriberTitle">
+          <div class="panel-heading compact-heading"><div><h1 id="transcriberTitle">Transcriber</h1><p>Audio to editable text.</p></div><span class="local-chip">Whisper · local</span></div>
+          <label class="transcribe-drop" for="transcribeInput" id="transcribeDrop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M5 14v5h14v-5"/></svg><span><strong id="transcribeFileName">Choose audio</strong><small>WAV, MP3, M4A, FLAC, OGG or WebM</small></span></label>
+          <input id="transcribeInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm,.aac" hidden />
+          <div class="transcribe-actions"><select id="transcribeLanguage" aria-label="Transcription language"><option value="auto">Detect language</option><option value="en">English</option><option value="ms">Malay</option><option value="zh">Chinese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option></select><button class="button button-primary" id="transcribeButton" type="button" disabled>Transcribe</button></div>
+          <div class="transcript-wrap"><textarea id="transcriptOutput" readonly placeholder="Your transcript will appear here." aria-label="Transcript output"></textarea><button class="copy-button" id="copyTranscript" type="button" disabled>Copy text</button></div>
+          <p class="transcribe-status" id="transcribeStatus">The first transcription downloads the local Whisper model once.</p>
         </section>
-      </section>
-
-      <section class="recent-section" aria-labelledby="recentTitle">
-        <div class="recent-heading">
-          <div>
-            <span class="step-number">03</span>
-            <h2 id="recentTitle">Recent generations</h2>
+        <section class="panel output-panel" aria-labelledby="outputTitle">
+          <div class="panel-heading compact-heading"><div><h1 id="outputTitle">Finished audio</h1><p>Your latest local files.</p></div></div>
+          <div class="folder-setting">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M3 7V5h7l2 2"/></svg>
+            <label for="outputFolderInput"><span>Save new files to</span><input id="outputFolderInput" type="text" placeholder="D:\Audio\SevenLabs" spellcheck="false" /></label>
+            <button id="saveFolderButton" type="button">Save</button>
           </div>
-          <p>Watermarked audio created and stored locally.</p>
-        </div>
-        <div class="history-list" id="historyList"></div>
-        <div class="history-empty" id="historyEmpty">
-          <span class="empty-wave" aria-hidden="true"></span>
-          <p>Your generated takes will appear here.</p>
-        </div>
-      </section>
+          <p class="folder-status" id="folderStatus" aria-live="polite"></p>
+          <div class="history-list" id="historyList"></div>
+          <div class="history-empty" id="historyEmpty"><span class="empty-line"></span><p>Your completed audio will appear here.</p></div>
+        </section>
+      </aside>
     </main>
 
     <dialog id="voiceDialog" class="dialog">
       <form method="dialog" class="dialog-card" id="voiceForm">
-        <button class="dialog-close" value="cancel" aria-label="Close dialog" type="submit">×</button>
-        <p class="eyebrow">New voice</p>
-        <h2 id="dialogTitle">Record a sample</h2>
-        <p id="dialogDescription">Speak naturally for 10-30 seconds. Read the prompt or say anything you like.</p>
-
-        <label class="name-field">
-          <span>Voice name</span>
-          <input id="voiceNameInput" type="text" maxlength="48" value="My voice" required />
-        </label>
-
-        <div class="recording-stage" id="recordingStage">
-          <div class="live-wave" id="liveWave" aria-hidden="true"></div>
-          <strong id="recordingStatus">Ready to record</strong>
-          <span id="recordingTimer">0:00</span>
-        </div>
-
+        <button class="dialog-close" value="cancel" aria-label="Close" type="submit">×</button><h2 id="dialogTitle">Record a sample</h2><p id="dialogDescription">Speak naturally for 10–30 seconds.</p>
+        <label class="name-field"><span>Voice name</span><input id="voiceNameInput" type="text" maxlength="48" value="My voice" required /></label>
+        <div class="recording-stage" id="recordingStage"><div class="live-wave" aria-hidden="true"></div><strong id="recordingStatus">Ready to record</strong><span id="recordingTimer">0:00</span></div>
         <audio id="samplePreview" controls hidden></audio>
-
-        <label class="check-field dialog-consent">
-          <input id="voiceConsent" type="checkbox" />
-          <span class="custom-check" aria-hidden="true"></span>
-          <span>I own this voice or have explicit permission to clone it.</span>
-        </label>
-
-        <div class="dialog-actions">
-          <button class="button button-secondary" id="dialogRecordButton" type="button">Start recording</button>
-          <button class="button button-primary" id="saveVoiceButton" type="button" disabled>Save voice</button>
-        </div>
+        <label class="check-field dialog-consent"><input id="voiceConsent" type="checkbox" /><span class="custom-check" aria-hidden="true"></span><span>I own this voice or have explicit permission to clone it.</span></label>
+        <div class="dialog-actions"><button class="button button-secondary" id="dialogRecordButton" type="button">Start recording</button><button class="button button-primary" id="saveVoiceButton" type="button" disabled>Save voice</button></div>
       </form>
     </dialog>
 
-    <template id="voiceItemTemplate">
-      <article class="voice-item">
-        <button class="voice-select" type="button">
-          <span class="voice-avatar" aria-hidden="true"></span>
-          <span class="voice-copy"><strong></strong><small></small></span>
-          <span class="selected-check" aria-hidden="true">✓</span>
-        </button>
-        <button class="item-delete" type="button" aria-label="Delete voice">×</button>
-      </article>
-    </template>
-
-    <template id="historyItemTemplate">
-      <article class="history-item">
-        <button class="play-button" type="button" aria-label="Play generated audio"><span aria-hidden="true">▶</span></button>
-        <div class="history-copy">
-          <strong></strong>
-          <p></p>
-          <div><span class="history-model"></span><span class="history-time"></span><span class="watermark-label">Watermarked</span></div>
-        </div>
-        <audio preload="metadata"></audio>
-        <a class="download-button" aria-label="Download WAV" title="Download WAV">↓</a>
-        <button class="item-delete history-delete" type="button" aria-label="Delete generation">×</button>
-      </article>
-    </template>
-
-    <script src="/assets/app.js?v=2" defer></script>
+    <template id="voiceItemTemplate"><article class="voice-item"><button class="voice-select" type="button"><span class="voice-avatar" aria-hidden="true"></span><span class="voice-copy"><strong></strong><small></small></span><span class="selected-check" aria-hidden="true">✓</span></button><button class="item-delete" type="button" aria-label="Delete voice">×</button></article></template>
+    <template id="historyItemTemplate"><article class="history-item"><button class="play-button" type="button" aria-label="Play audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z" /></svg></button><div class="history-copy"><strong></strong><p></p><div><span class="history-model"></span><span class="history-time"></span></div></div><audio preload="metadata"></audio><a class="download-button" aria-label="Download WAV" title="Download WAV"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14" /></svg></a><button class="item-delete history-delete" type="button" aria-label="Delete audio">×</button></article></template>
+    <script src="/assets/app.js?v=3" defer></script>
   </body>
 </html>
-
