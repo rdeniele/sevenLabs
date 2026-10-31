@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0d0e0c" />
     <title>SevenLabs — Local voice studio</title>
     <link rel="icon" type="image/png" href="/assets/sevenlabs-logo.png?v=1" />
-    <link rel="stylesheet" href="/assets/styles.css?v=4" />
+    <link rel="stylesheet" href="/assets/styles.css?v=6" />
   </head>
   <body>
     <header class="topbar">
@@ -20,7 +20,7 @@
     <main class="studio-shell">
       <aside class="panel voice-panel" aria-labelledby="voiceTitle">
         <div class="panel-heading">
-          <div><h1 id="voiceTitle">Voice</h1><p>Choose who speaks.</p></div>
+          <div><h1 id="voiceTitle">Voices</h1><p>Used by Clone and Ultimate.</p></div>
           <button class="icon-button" id="addVoiceButton" type="button" aria-label="Add voice" title="Add voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
         </div>
         <div class="voice-list" id="voiceList" aria-live="polite"></div>
@@ -39,18 +39,28 @@
           <div><h1 id="scriptTitle">Script</h1><p>Write or paste everything you want your voice to say.</p></div>
           <div class="script-stats" aria-live="polite"><strong id="wordCount">0</strong><span>words</span><i></i><strong id="chunkCount">0</strong><span>safe parts</span></div>
         </div>
+        <div class="mode-tabs" role="tablist" aria-label="Generation mode">
+          <button type="button" data-mode="design" role="tab" aria-selected="false">Voice Design</button>
+          <button type="button" data-mode="clone" role="tab" aria-selected="true" class="active">Clone</button>
+          <button type="button" data-mode="ultimate" role="tab" aria-selected="false">Ultimate Clone</button>
+        </div>
+        <div class="mode-fields">
+          <label><span id="stylePromptLabel">Style direction <small>optional</small></span><input id="stylePrompt" type="text" maxlength="1000" placeholder="Warm, confident, conversational, medium pace…" /></label>
+          <label id="referenceTranscriptField" hidden><span>Reference transcript <small>required</small></span><input id="referenceTranscript" type="text" maxlength="10000" placeholder="Type exactly what the reference voice says…" /></label>
+        </div>
+        <p class="mode-help" id="modeHelp">Clone a saved voice and optionally steer its emotion, pace, and style.</p>
         <div class="script-editor">
           <textarea id="scriptInput" maxlength="50000" placeholder="Write your thoughts, narration, story, or full script here. SevenLabs will handle longer scripts automatically." aria-label="Speech script"></textarea>
           <div class="editor-footer"><span id="splitMessage">Nothing will be rewritten or added.</span><span id="characterCount">0 / 50,000</span></div>
         </div>
         <div class="settings-bar">
-          <label><span>Model</span><select id="modelSelect"><option value="nano">Nano</option><option value="turbo">Turbo</option><option value="multilingual">Multilingual V3</option></select></label>
-          <label><span>Language</span><select id="languageSelect"><option value="en">English</option><option value="ms">Malay</option><option value="zh">Chinese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="pt">Portuguese</option><option value="it">Italian</option><option value="hi">Hindi</option><option value="ar">Arabic</option><option value="tr">Turkish</option><option value="ru">Russian</option><option value="nl">Dutch</option><option value="pl">Polish</option></select></label>
-          <label class="range-field"><span>Expression <output id="expressionValue">50</output></span><input id="expressionRange" type="range" min="0" max="100" value="50" /></label>
-          <label class="range-field"><span>Fidelity <output id="fidelityValue">50</output></span><input id="fidelityRange" type="range" min="0" max="100" value="50" /></label>
+          <label class="range-field"><span>Guidance <output id="guidanceValue">2.0</output></span><input id="guidanceRange" type="range" min="10" max="40" value="20" /></label>
+          <label><span>Quality</span><select id="inferenceSteps"><option value="8">Fast · 8 steps</option><option value="10" selected>Balanced · 10</option><option value="15">High · 15</option><option value="20">Maximum · 20</option></select></label>
+          <div class="engine-name"><span>Voice engine</span><strong>VoxCPM2 · 2B</strong></div>
         </div>
+        <div class="engine-setup" id="engineSetup" hidden><div><strong id="engineSetupTitle">VoxCPM2 is required</strong><span id="engineSetupText">Download the local voice model once, then use it offline.</span></div><button class="button button-primary" id="downloadModelButton" type="button">Download model</button><div class="engine-download-track" id="engineDownloadTrack" hidden><span id="engineDownloadBar"></span></div></div>
         <div class="action-bar">
-          <label class="check-field"><input id="consentCheckbox" type="checkbox" /><span class="custom-check" aria-hidden="true"></span><span>I own this voice or have permission to use it.</span></label>
+          <label class="check-field"><input id="consentCheckbox" type="checkbox" /><span class="custom-check" aria-hidden="true"></span><span id="consentText">I own this voice or have permission to use it.</span></label>
           <button class="button generate-button" id="generateButton" type="button" disabled><span id="generateLabel">Generate full audio</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
         </div>
         <div class="generation-progress" id="generationProgress" hidden aria-live="polite"><div><strong id="progressLabel">Preparing long-form audio</strong><span id="progressTimer">0:00</span></div><div class="progress-track"><span></span></div><p>Parts are generated in order, then joined into one WAV automatically.</p></div>
@@ -59,21 +69,15 @@
 
       <aside class="utility-column">
         <section class="panel transcriber-panel" aria-labelledby="transcriberTitle">
-          <div class="panel-heading compact-heading"><div><h1 id="transcriberTitle">Transcriber</h1><p>Audio to editable text.</p></div><span class="local-chip">Whisper · local</span></div>
+          <div class="panel-heading compact-heading"><div><h1 id="transcriberTitle">Transcriber</h1><p>Audio to editable text.</p></div><select class="model-chip" id="transcribeModel" aria-label="Transcription model"><option value="tiny">Tiny · fastest</option><option value="base" selected>Base · balanced</option><option value="small">Small · accurate</option></select></div>
           <label class="transcribe-drop" for="transcribeInput" id="transcribeDrop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M5 14v5h14v-5"/></svg><span><strong id="transcribeFileName">Choose audio</strong><small>WAV, MP3, M4A, FLAC, OGG or WebM</small></span></label>
           <input id="transcribeInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg,.webm,.aac" hidden />
           <div class="transcribe-actions"><select id="transcribeLanguage" aria-label="Transcription language"><option value="auto">Detect language</option><option value="en">English</option><option value="ms">Malay</option><option value="zh">Chinese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option></select><button class="button button-primary" id="transcribeButton" type="button" disabled>Transcribe</button></div>
           <div class="transcript-wrap"><textarea id="transcriptOutput" readonly placeholder="Your transcript will appear here." aria-label="Transcript output"></textarea><button class="copy-button" id="copyTranscript" type="button" disabled>Copy text</button></div>
-          <p class="transcribe-status" id="transcribeStatus">The first transcription downloads the local Whisper model once.</p>
+          <p class="transcribe-status" id="transcribeStatus">The first use of each model downloads it once.</p>
         </section>
         <section class="panel output-panel" aria-labelledby="outputTitle">
           <div class="panel-heading compact-heading"><div><h1 id="outputTitle">Finished audio</h1><p>Your latest local files.</p></div></div>
-          <div class="folder-setting">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M3 7V5h7l2 2"/></svg>
-            <label for="outputFolderInput"><span>Save new files to</span><input id="outputFolderInput" type="text" placeholder="D:\Audio\SevenLabs" spellcheck="false" /></label>
-            <button id="saveFolderButton" type="button">Save</button>
-          </div>
-          <p class="folder-status" id="folderStatus" aria-live="polite"></p>
           <div class="history-list" id="historyList"></div>
           <div class="history-empty" id="historyEmpty"><span class="empty-line"></span><p>Your completed audio will appear here.</p></div>
         </section>
@@ -93,6 +97,6 @@
 
     <template id="voiceItemTemplate"><article class="voice-item"><button class="voice-select" type="button"><span class="voice-avatar" aria-hidden="true"></span><span class="voice-copy"><strong></strong><small></small></span><span class="selected-check" aria-hidden="true">✓</span></button><button class="item-delete" type="button" aria-label="Delete voice">×</button></article></template>
     <template id="historyItemTemplate"><article class="history-item"><button class="play-button" type="button" aria-label="Play audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z" /></svg></button><div class="history-copy"><strong></strong><p></p><div><span class="history-model"></span><span class="history-time"></span></div></div><audio preload="metadata"></audio><a class="download-button" aria-label="Download WAV" title="Download WAV"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14" /></svg></a><button class="item-delete history-delete" type="button" aria-label="Delete audio">×</button></article></template>
-    <script src="/assets/app.js?v=3" defer></script>
+    <script src="/assets/app.js?v=4" defer></script>
   </body>
 </html>

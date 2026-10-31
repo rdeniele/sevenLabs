@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import importlib.util
-import inspect
 import json
 import os
 import re
@@ -28,8 +28,8 @@ DATA_DIR = ROOT / "data"
 VOICES_DIR = DATA_DIR / "voices"
 OUTPUTS_DIR = DATA_DIR / "outputs"
 MODELS_DIR = DATA_DIR / "models"
-SETTINGS_FILE = DATA_DIR / "settings.json"
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
+TRANSCRIPTION_MODELS = {"tiny", "base", "small"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_SCRIPT_CHARS = 50_000
 MAX_TRANSCRIPTION_BYTES = 500 * 1024 * 1024
@@ -37,15 +37,6 @@ CHUNK_TARGET_WORDS = 70
 CHUNK_MAX_WORDS = 90
 CHUNK_MAX_CHARS = 560
 CHUNK_PAUSE_SECONDS = 0.28
-STRICT_READING_OPTIONS = {
-    # Stay close to Chatterbox's tuned defaults. Aggressive filtering can make
-    # Nano select silence tokens for the rest of an otherwise valid take.
-    "temperature": 0.65,
-    "top_p": 0.95,
-    "top_k": 1000,
-    "repetition_penalty": 1.2,
-}
-
 for directory in (VOICES_DIR, OUTPUTS_DIR, MODELS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -74,17 +65,11 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def output_folder() -> Path:
-    configured = str(read_json(SETTINGS_FILE).get("output_folder") or "").strip()
-    return Path(configured) if configured else OUTPUTS_DIR
-
-
 def output_audio_path(output_id: str, voice_name: str) -> Path:
-    folder = output_folder()
-    folder.mkdir(parents=True, exist_ok=True)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"SevenLabs-{safe_name(voice_name, 'voice').replace(' ', '-')}-{timestamp}-{output_id[:8]}.wav"
-    return folder / filename
+    return OUTPUTS_DIR / filename
 
 
 def record_audio_path(record: dict[str, Any], output_id: str) -> Path:
@@ -98,17 +83,25 @@ def public_voice(record: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass
 class ModelHandle:
-    name: str
     model: Any
     device: str
     loaded_at: float
 
 
 class VoiceEngine:
+    MODEL_ID = "OpenBMB/VoxCPM2"
+    MODEL_DIR = MODELS_DIR / "voxcpm2"
+    DOWNLOAD_BYTES = 2_290_000_000
+
     def __init__(self) -> None:
         self._handle: ModelHandle | None = None
         self._load_lock = threading.Lock()
         self._generate_lock = threading.Lock()
+        self._download_lock = threading.Lock()
+        self._download_started_at = 0.0
+        self._download_start_size = 0
+        self._download_error: str | None = None
+        self._downloading = False
 
     @staticmethod
     def device() -> str:
@@ -120,7 +113,7 @@ class VoiceEngine:
             return "unavailable"
 
     @staticmethod
-    def device_for_model(model_name: str) -> str:
+    def device_for_model(model_name: str = "voxcpm2") -> str:
         override = os.environ.get("LOCAL_VOICE_DEVICE", "auto").lower()
         if override in {"cpu", "cuda"}:
             return override
@@ -131,188 +124,150 @@ class VoiceEngine:
             if not torch.cuda.is_available():
                 return "cpu"
             memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            minimums = {"nano": 6, "turbo": 8, "multilingual": 10}
-            return "cuda" if memory_gb >= minimums[model_name] else "cpu"
-        except (ImportError, KeyError):
+            return "cuda" if memory_gb >= 6 else "cpu"
+        except ImportError:
             return "cpu"
 
     @staticmethod
     def installed() -> bool:
-        return importlib.util.find_spec("chatterbox") is not None
+        return importlib.util.find_spec("voxcpm") is not None
+
+    @classmethod
+    def model_downloaded(cls) -> bool:
+        return (cls.MODEL_DIR / "config.json").is_file() and any(cls.MODEL_DIR.rglob("*.safetensors"))
+
+    @classmethod
+    def model_size(cls) -> int:
+        if not cls.MODEL_DIR.exists():
+            return 0
+        return sum(path.stat().st_size for path in cls.MODEL_DIR.rglob("*") if path.is_file())
 
     @staticmethod
     def detected_device() -> str:
         if importlib.util.find_spec("torch") is None:
             return "unavailable"
-        return "cuda" if shutil.which("nvidia-smi") else "cpu"
+        try:
+            if "+cpu" in importlib.metadata.version("torch").lower():
+                return "cpu"
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            return "cuda" if (system_root / "System32" / "nvidia-smi.exe").is_file() else "cpu"
+        except importlib.metadata.PackageNotFoundError:
+            return "cpu"
 
     def status(self) -> dict[str, Any]:
+        downloaded_bytes = self.model_size()
+        elapsed = max(0.001, time.time() - self._download_started_at) if self._downloading else 0
+        transferred = max(0, downloaded_bytes - self._download_start_size)
         return {
             "installed": self.installed(),
             "device": self._handle.device if self._handle else self.detected_device(),
-            "loaded_model": self._handle.name if self._handle else None,
+            "loaded_model": "voxcpm2" if self._handle else None,
             "offline_ready": self._handle is not None,
+            "model_downloaded": self.model_downloaded(),
+            "is_downloading": self._downloading,
+            "downloaded_bytes": downloaded_bytes,
+            "download_percent": round(min(99.9, downloaded_bytes / self.DOWNLOAD_BYTES * 100), 1) if self._downloading else (100.0 if self.model_downloaded() else 0.0),
+            "download_speed_mbps": round(transferred / 1024 / 1024 / elapsed, 1) if elapsed else 0.0,
+            "download_error": self._download_error,
         }
 
-    def _load(self, model_name: str) -> ModelHandle:
+    def start_download(self) -> bool:
+        with self._download_lock:
+            if self._downloading or self.model_downloaded():
+                return False
+            self._downloading = True
+            self._download_error = None
+            self._download_started_at = time.time()
+            self._download_start_size = self.model_size()
+            threading.Thread(target=self._download_model, daemon=True, name="voxcpm-download").start()
+            return True
+
+    def _download_model(self) -> None:
+        try:
+            from huggingface_hub import snapshot_download
+
+            self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            snapshot_download(repo_id=self.MODEL_ID, local_dir=str(self.MODEL_DIR))
+        except Exception as error:
+            self._download_error = str(error)
+        finally:
+            self._downloading = False
+
+    def _load(self) -> ModelHandle:
         with self._load_lock:
-            if self._handle and self._handle.name == model_name:
+            if self._handle:
                 return self._handle
 
             if not self.installed():
                 raise RuntimeError("The voice engine is not installed. Run setup.ps1 first.")
+            if not self.model_downloaded():
+                raise RuntimeError("Download the VoxCPM2 voice engine before generating audio.")
 
-            device = self.device_for_model(model_name)
+            device = self.device_for_model()
             if device == "unavailable":
                 raise RuntimeError("PyTorch is not installed. Run setup.ps1 first.")
 
-            if model_name == "nano":
-                from chatterbox.tts_turbo import ChatterboxTurboTTS
+            from voxcpm import VoxCPM
 
-                model = ChatterboxTurboTTS.from_pretrained(device=device, nano=True)
-            elif model_name == "turbo":
-                from chatterbox.tts_turbo import ChatterboxTurboTTS
-
-                model = ChatterboxTurboTTS.from_pretrained(device=device)
-            elif model_name == "multilingual":
-                from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-
-                model = ChatterboxMultilingualTTS.from_pretrained(device=device, t3_model="v3")
-            else:
-                raise ValueError("Unknown model")
-
-            self._handle = ModelHandle(model_name, model, device, time.time())
+            model = VoxCPM.from_pretrained(
+                str(self.MODEL_DIR),
+                load_denoiser=False,
+                optimize=device == "cuda",
+                device=device,
+                local_files_only=True,
+            )
+            self._handle = ModelHandle(model, device, time.time())
             return self._handle
-
-    @staticmethod
-    def _supported_kwargs(callable_obj: Any, values: dict[str, Any]) -> dict[str, Any]:
-        signature = inspect.signature(callable_obj)
-        accepts_any = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
-        if accepts_any:
-            return values
-        return {key: value for key, value in values.items() if key in signature.parameters}
-
-    @staticmethod
-    def _speech_end_sample(
-        wave: Any,
-        sample_rate: int,
-        threshold: float = 0.001,
-        frame_seconds: float = 0.1,
-    ) -> int:
-        """Find the end of audible speech using frame RMS, ignoring watermark noise."""
-        activity = wave.float()
-        if getattr(activity, "ndim", 1) > 1:
-            activity = activity.pow(2).mean(dim=0).sqrt()
-        else:
-            activity = activity.abs()
-
-        total_samples = int(activity.shape[-1])
-        if total_samples == 0:
-            return 0
-        frame_samples = max(1, int(sample_rate * frame_seconds))
-        complete_frames = total_samples // frame_samples
-        last_active_end = 0
-
-        if complete_frames:
-            framed = activity[: complete_frames * frame_samples].reshape(complete_frames, frame_samples)
-            frame_rms = framed.pow(2).mean(dim=1).sqrt()
-            active_frames = (frame_rms > threshold).nonzero(as_tuple=False).flatten()
-            if active_frames.numel():
-                last_active_end = (int(active_frames[-1].item()) + 1) * frame_samples
-
-        remainder_start = complete_frames * frame_samples
-        if remainder_start < total_samples:
-            remainder_rms = activity[remainder_start:].pow(2).mean().sqrt()
-            if float(remainder_rms.item()) > threshold:
-                last_active_end = total_samples
-
-        return last_active_end
-
-    @classmethod
-    def _trim_trailing_silence(
-        cls,
-        wave: Any,
-        sample_rate: int,
-        threshold: float = 0.001,
-        minimum_tail_seconds: float = 1.0,
-        keep_seconds: float = 0.35,
-    ) -> Any:
-        """Remove a long silent tail while preserving natural sentence room."""
-        speech_end = cls._speech_end_sample(wave, sample_rate, threshold)
-        if speech_end == 0:
-            return wave
-
-        tail_samples = wave.shape[-1] - speech_end
-        if tail_samples <= int(sample_rate * minimum_tail_seconds):
-            return wave
-
-        end = min(wave.shape[-1], speech_end + int(sample_rate * keep_seconds))
-        return wave[..., :end]
-
-    @classmethod
-    def _spoken_seconds(cls, wave: Any, sample_rate: int, threshold: float = 0.001) -> float:
-        return float(cls._speech_end_sample(wave, sample_rate, threshold) / sample_rate)
-
-    @classmethod
-    def _needs_silence_retry(cls, wave: Any, sample_rate: int, text: str) -> bool:
-        word_count = len(text.split())
-        if word_count < 20:
-            return False
-        minimum_expected_seconds = min(12.0, word_count * 0.15)
-        return cls._spoken_seconds(wave, sample_rate) < minimum_expected_seconds
 
     def generate(
         self,
-        model_name: str,
+        mode: str,
         text: str,
-        reference_path: Path,
+        reference_path: Path | None,
         output_path: Path,
-        language: str,
-        exaggeration: float,
-        cfg_weight: float,
+        style_prompt: str,
+        reference_transcript: str,
+        guidance: float,
+        inference_steps: int,
         seed: int,
     ) -> dict[str, Any]:
         with self._generate_lock:
-            handle = self._load(model_name)
+            handle = self._load()
 
             try:
-                import torch
-                import torchaudio as ta
+                import soundfile as sf
 
+                if mode not in {"design", "clone", "ultimate"}:
+                    raise ValueError("Choose Voice Design, Clone, or Ultimate Clone mode.")
+                if mode != "design" and reference_path is None:
+                    raise ValueError("Choose a saved voice for cloning.")
+                if mode == "ultimate" and not reference_transcript.strip():
+                    raise ValueError("Ultimate Clone needs the exact transcript of the reference audio.")
+
+                spoken_text = f"({style_prompt.strip()}){text}" if style_prompt.strip() else text
                 values: dict[str, Any] = {
-                    "audio_prompt_path": str(reference_path),
-                    "exaggeration": exaggeration,
-                    "cfg_weight": cfg_weight,
-                    **STRICT_READING_OPTIONS,
+                    "text": spoken_text,
+                    "cfg_value": guidance,
+                    "inference_timesteps": inference_steps,
+                    "seed": seed,
+                    # Preserve the submitted script exactly. VoxCPM's optional
+                    # normalizer can rewrite numbers and punctuation.
+                    "normalize": False,
                 }
-                if model_name == "multilingual":
-                    values["language_id"] = language
+                if mode == "clone":
+                    values["reference_wav_path"] = str(reference_path)
+                elif mode == "ultimate":
+                    values["prompt_wav_path"] = str(reference_path)
+                    values["prompt_text"] = reference_transcript.strip()
 
-                kwargs = self._supported_kwargs(handle.model.generate, values)
-                def generate_once(attempt_seed: int) -> Any:
-                    torch.manual_seed(attempt_seed)
-                    if torch.cuda.is_available():
-                        torch.cuda.manual_seed_all(attempt_seed)
-                    attempt = handle.model.generate(text, **kwargs)
-                    if getattr(attempt, "ndim", 1) == 1:
-                        attempt = attempt.unsqueeze(0)
-                    return attempt
-
-                used_seed = seed
-                wave = generate_once(used_seed)
-                for offset in (1, 2):
-                    if not self._needs_silence_retry(wave, handle.model.sr, text):
-                        break
-                    retry_seed = (seed + offset) % (2**32)
-                    retry_wave = generate_once(retry_seed)
-                    if self._spoken_seconds(retry_wave, handle.model.sr) > self._spoken_seconds(wave, handle.model.sr):
-                        wave = retry_wave
-                        used_seed = retry_seed
-
-                wave = self._trim_trailing_silence(wave, handle.model.sr)
-                ta.save(str(output_path), wave.detach().cpu(), handle.model.sr)
-                duration = float(wave.shape[-1] / handle.model.sr)
-                return {"duration_seconds": round(duration, 2), "device": handle.device, "seed": used_seed}
+                wave = handle.model.generate(**values)
+                sample_rate = int(handle.model.tts_model.sample_rate)
+                sf.write(str(output_path), wave, sample_rate, subtype="PCM_16")
+                return {
+                    "duration_seconds": round(len(wave) / sample_rate, 2),
+                    "device": handle.device,
+                    "seed": seed,
+                }
             except RuntimeError as error:
                 if "out of memory" in str(error).lower():
                     try:
@@ -322,13 +277,13 @@ class VoiceEngine:
                             torch.cuda.empty_cache()
                     except ImportError:
                         pass
-                    raise RuntimeError("The selected model ran out of GPU memory. Try Nano or close other GPU apps.") from error
+                    raise RuntimeError("VoxCPM2 ran out of GPU memory. Close other GPU apps or use CPU mode.") from error
                 raise
 
 
 class TranscriptionEngine:
     def __init__(self) -> None:
-        self._model: Any | None = None
+        self._models: dict[str, Any] = {}
         self._device: str | None = None
         self._load_lock = threading.Lock()
         self._transcribe_lock = threading.Lock()
@@ -340,33 +295,37 @@ class TranscriptionEngine:
     def status(self) -> dict[str, Any]:
         return {
             "installed": self.installed(),
-            "loaded": self._model is not None,
+            "loaded": bool(self._models),
+            "loaded_models": sorted(self._models),
             "device": self._device or VoiceEngine.detected_device(),
         }
 
-    def _load(self) -> Any:
+    def _load(self, model_name: str) -> Any:
+        if model_name not in TRANSCRIPTION_MODELS:
+            raise ValueError("Choose the Tiny, Base, or Small transcription model.")
         with self._load_lock:
-            if self._model is not None:
-                return self._model
+            if model_name in self._models:
+                return self._models[model_name]
             if not self.installed():
                 raise RuntimeError("The transcriber is not installed. Run setup.ps1 again.")
 
             from faster_whisper import WhisperModel
 
-            device = "cuda" if VoiceEngine.device_for_model("nano") == "cuda" else "cpu"
+            device = "cuda" if VoiceEngine.device_for_model() == "cuda" else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
-            self._model = WhisperModel(
-                "base",
+            model = WhisperModel(
+                model_name,
                 device=device,
                 compute_type=compute_type,
                 download_root=str(MODELS_DIR / "faster-whisper"),
             )
+            self._models[model_name] = model
             self._device = device
-            return self._model
+            return model
 
-    def transcribe(self, audio_path: Path, language: str | None = None) -> dict[str, Any]:
+    def transcribe(self, audio_path: Path, language: str | None = None, model_name: str = "base") -> dict[str, Any]:
         with self._transcribe_lock:
-            model = self._load()
+            model = self._load(model_name)
             segments, info = model.transcribe(
                 str(audio_path),
                 language=language or None,
@@ -389,6 +348,7 @@ class TranscriptionEngine:
                 "duration_seconds": round(info.duration, 2),
                 "segments": rows,
                 "device": self._device,
+                "model": model_name,
             }
 
 
@@ -466,29 +426,39 @@ def split_script(
 
 
 def combine_wav_files(paths: list[Path], output_path: Path, pause_seconds: float = CHUNK_PAUSE_SECONDS) -> float:
-    import torch
-    import torchaudio as ta
+    import wave
 
-    waves = []
-    sample_rate: int | None = None
-    for path in paths:
-        wave, rate = ta.load(str(path))
-        if sample_rate is None:
-            sample_rate = rate
-        elif rate != sample_rate:
-            wave = ta.functional.resample(wave, rate, sample_rate)
-        waves.append(wave)
-    if not waves or sample_rate is None:
+    if not paths:
         raise RuntimeError("No generated audio was available to combine.")
-    pause = torch.zeros((waves[0].shape[0], int(sample_rate * pause_seconds)))
-    combined_parts = []
-    for index, wave in enumerate(waves):
-        if index:
-            combined_parts.append(pause)
-        combined_parts.append(wave)
-    combined = torch.cat(combined_parts, dim=-1)
-    ta.save(str(output_path), combined, sample_rate, encoding="PCM_S", bits_per_sample=16)
-    return round(combined.shape[-1] / sample_rate, 2)
+
+    chunks: list[bytes] = []
+    parameters: tuple[int, int, int] | None = None
+    total_frames = 0
+    for path in paths:
+        with wave.open(str(path), "rb") as source:
+            current = (source.getnchannels(), source.getsampwidth(), source.getframerate())
+            if parameters is None:
+                parameters = current
+            elif current != parameters:
+                raise RuntimeError("Generated audio parts do not share the same WAV format.")
+            frame_count = source.getnframes()
+            chunks.append(source.readframes(frame_count))
+            total_frames += frame_count
+
+    assert parameters is not None
+    channels, sample_width, sample_rate = parameters
+    pause_frames = int(sample_rate * pause_seconds)
+    pause = b"\x00" * pause_frames * channels * sample_width
+    with wave.open(str(output_path), "wb") as destination:
+        destination.setnchannels(channels)
+        destination.setsampwidth(sample_width)
+        destination.setframerate(sample_rate)
+        for index, chunk in enumerate(chunks):
+            if index:
+                destination.writeframes(pause)
+                total_frames += pause_frames
+            destination.writeframes(chunk)
+    return round(total_frames / sample_rate, 2)
 
 
 engine = VoiceEngine()
@@ -497,12 +467,13 @@ app = FastAPI(title="SevenLabs", docs_url=None, redoc_url=None)
 
 
 class GenerateRequest(BaseModel):
-    voice_id: str = Field(min_length=1, max_length=64)
+    voice_id: str | None = Field(default=None, max_length=64)
     text: str = Field(min_length=1, max_length=MAX_SCRIPT_CHARS)
-    model: str = Field(default="nano", pattern="^(nano|turbo|multilingual)$")
-    language: str = Field(default="en", min_length=2, max_length=12)
-    exaggeration: float = Field(default=0.5, ge=0.0, le=1.0)
-    cfg_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    mode: str = Field(default="clone", pattern="^(design|clone|ultimate)$")
+    style_prompt: str = Field(default="", max_length=1_000)
+    reference_transcript: str = Field(default="", max_length=10_000)
+    guidance: float = Field(default=2.0, ge=1.0, le=4.0)
+    inference_steps: int = Field(default=10, ge=4, le=30)
     seed: int = Field(default=0, ge=0, le=2_147_483_647)
     consent: bool
 
@@ -511,18 +482,21 @@ class ChunkPreviewRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_SCRIPT_CHARS)
 
 
-class OutputFolderRequest(BaseModel):
-    path: str = Field(min_length=1, max_length=1_000)
-
-
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {
         "ok": True,
         "engine": engine.status(),
         "transcriber": transcriber.status(),
-        "models": ["nano", "turbo", "multilingual"],
+        "models": ["voxcpm2"],
+        "modes": ["design", "clone", "ultimate"],
     }
+
+
+@app.post("/api/model/download")
+async def download_voice_model() -> dict[str, Any]:
+    started = engine.start_download()
+    return {"started": started, **engine.status()}
 
 
 @app.post("/api/chunks")
@@ -532,29 +506,6 @@ async def preview_chunks(request: ChunkPreviewRequest) -> dict[str, Any]:
         "count": len(chunks),
         "chunks": [{"number": index + 1, "words": len(chunk.split()), "text": chunk} for index, chunk in enumerate(chunks)],
     }
-
-
-@app.get("/api/settings/output-folder")
-async def get_output_folder() -> dict[str, str]:
-    return {"path": str(output_folder())}
-
-
-@app.put("/api/settings/output-folder")
-async def set_output_folder(request: OutputFolderRequest) -> dict[str, str]:
-    raw_path = os.path.expandvars(request.path.strip().strip('"'))
-    folder = Path(raw_path).expanduser()
-    if not folder.is_absolute():
-        folder = (ROOT / folder).resolve()
-    try:
-        folder.mkdir(parents=True, exist_ok=True)
-        if not folder.is_dir():
-            raise OSError("The selected location is not a folder.")
-        with tempfile.NamedTemporaryFile(prefix=".sevenlabs-", dir=folder):
-            pass
-    except OSError as error:
-        raise HTTPException(400, f"SevenLabs cannot write to that folder: {error}") from error
-    write_json(SETTINGS_FILE, {"output_folder": str(folder)})
-    return {"path": str(folder)}
 
 
 @app.get("/api/voices")
@@ -631,19 +582,29 @@ async def history() -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: item.get("created_at") or "", reverse=True)[:100]
 
 
+def resolve_generation_voice(request: GenerateRequest) -> tuple[dict[str, Any], Path | None]:
+    if request.mode == "design":
+        return {"id": None, "name": "Designed voice"}, None
+    if not request.voice_id:
+        raise HTTPException(400, "Choose a saved voice for cloning.")
+    voice_dir = VOICES_DIR / safe_name(request.voice_id, "invalid")
+    voice_record = read_json(voice_dir / "voice.json")
+    if not voice_record:
+        raise HTTPException(404, "Voice not found")
+    reference_path = voice_dir / voice_record["reference_file"]
+    if not reference_path.exists():
+        raise HTTPException(404, "The reference audio for this voice is missing.")
+    if request.mode == "ultimate" and not request.reference_transcript.strip():
+        raise HTTPException(400, "Ultimate Clone needs the exact transcript of the reference audio.")
+    return voice_record, reference_path
+
+
 @app.post("/api/generate")
 async def generate(request: GenerateRequest) -> dict[str, Any]:
     if not request.consent:
         raise HTTPException(400, "Consent confirmation is required.")
 
-    voice_dir = VOICES_DIR / safe_name(request.voice_id, "invalid")
-    voice_record = read_json(voice_dir / "voice.json")
-    if not voice_record:
-        raise HTTPException(404, "Voice not found")
-
-    reference_path = voice_dir / voice_record["reference_file"]
-    if not reference_path.exists():
-        raise HTTPException(404, "The reference audio for this voice is missing.")
+    voice_record, reference_path = resolve_generation_voice(request)
 
     output_id = uuid.uuid4().hex
     output_path = output_audio_path(output_id, voice_record["name"])
@@ -652,13 +613,14 @@ async def generate(request: GenerateRequest) -> dict[str, Any]:
     try:
         result = await asyncio.to_thread(
             engine.generate,
-            request.model,
+            request.mode,
             request.text.strip(),
             reference_path,
             output_path,
-            request.language,
-            request.exaggeration,
-            request.cfg_weight,
+            request.style_prompt,
+            request.reference_transcript,
+            request.guidance,
+            request.inference_steps,
             seed,
         )
     except Exception as error:
@@ -667,17 +629,18 @@ async def generate(request: GenerateRequest) -> dict[str, Any]:
 
     record = {
         "id": output_id,
-        "voice_id": request.voice_id,
+        "voice_id": voice_record.get("id"),
         "voice_name": voice_record["name"],
         "text": request.text.strip(),
-        "model": request.model,
-        "language": request.language,
+        "model": "voxcpm2",
+        "mode": request.mode,
+        "style_prompt": request.style_prompt.strip(),
         "seed": result["seed"],
         "created_at": now_iso(),
         "duration_seconds": result["duration_seconds"],
         "device": result["device"],
         "synthetic": True,
-        "watermarked": True,
+        "watermarked": False,
         "audio_url": f"/api/audio/{output_id}",
         "download_url": f"/api/audio/{output_id}?download=1",
         "audio_path": str(output_path),
@@ -691,13 +654,7 @@ async def generate_long(request: GenerateRequest) -> dict[str, Any]:
     if not request.consent:
         raise HTTPException(400, "Consent confirmation is required.")
 
-    voice_dir = VOICES_DIR / safe_name(request.voice_id, "invalid")
-    voice_record = read_json(voice_dir / "voice.json")
-    if not voice_record:
-        raise HTTPException(404, "Voice not found")
-    reference_path = voice_dir / voice_record["reference_file"]
-    if not reference_path.exists():
-        raise HTTPException(404, "The reference audio for this voice is missing.")
+    voice_record, reference_path = resolve_generation_voice(request)
 
     script = request.text.strip()
     chunks = split_script(script)
@@ -717,14 +674,15 @@ async def generate_long(request: GenerateRequest) -> dict[str, Any]:
                 chunk_path = Path(temp_dir) / f"chunk-{index:04d}.wav"
                 result = await asyncio.to_thread(
                     engine.generate,
-                    request.model,
+                    request.mode,
                     chunk,
                     reference_path,
                     chunk_path,
-                    request.language,
-                    request.exaggeration,
-                    request.cfg_weight,
-                    (base_seed + index) % (2**31 - 1),
+                    request.style_prompt,
+                    request.reference_transcript,
+                    request.guidance,
+                    request.inference_steps,
+                    base_seed,
                 )
                 chunk_paths.append(chunk_path)
                 used_seeds.append(result["seed"])
@@ -736,11 +694,12 @@ async def generate_long(request: GenerateRequest) -> dict[str, Any]:
 
     record = {
         "id": output_id,
-        "voice_id": request.voice_id,
+        "voice_id": voice_record.get("id"),
         "voice_name": voice_record["name"],
         "text": script,
-        "model": request.model,
-        "language": request.language,
+        "model": "voxcpm2",
+        "mode": request.mode,
+        "style_prompt": request.style_prompt.strip(),
         "seed": base_seed,
         "chunk_seeds": used_seeds,
         "chunk_count": len(chunks),
@@ -748,7 +707,7 @@ async def generate_long(request: GenerateRequest) -> dict[str, Any]:
         "duration_seconds": duration,
         "device": ", ".join(sorted(devices)),
         "synthetic": True,
-        "watermarked": True,
+        "watermarked": False,
         "long_form": True,
         "audio_url": f"/api/audio/{output_id}",
         "download_url": f"/api/audio/{output_id}?download=1",
@@ -762,7 +721,10 @@ async def generate_long(request: GenerateRequest) -> dict[str, Any]:
 async def transcribe_audio(
     audio: UploadFile = File(...),
     language: str = Form(default="auto"),
+    model: str = Form(default="base"),
 ) -> dict[str, Any]:
+    if model not in TRANSCRIPTION_MODELS:
+        raise HTTPException(400, "Choose the Tiny, Base, or Small transcription model.")
     suffix = Path(audio.filename or "audio.wav").suffix.lower()
     if suffix not in ALLOWED_AUDIO:
         raise HTTPException(400, "Use a WAV, MP3, M4A, FLAC, OGG, AAC, or WebM audio file.")
@@ -778,7 +740,12 @@ async def transcribe_audio(
                 destination.write(chunk)
         if total < 1_024:
             raise HTTPException(400, "The audio file is empty or too short.")
-        return await asyncio.to_thread(transcriber.transcribe, temp_path, None if language == "auto" else language)
+        return await asyncio.to_thread(
+            transcriber.transcribe,
+            temp_path,
+            None if language == "auto" else language,
+            model,
+        )
     except HTTPException:
         raise
     except Exception as error:

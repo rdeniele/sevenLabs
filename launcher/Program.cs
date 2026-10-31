@@ -5,14 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.Text;
+using System.Windows.Forms;
 
 [assembly: AssemblyTitle("SevenLabs")]
-[assembly: AssemblyDescription("Private local voice cloning and transcription studio")]
+[assembly: AssemblyDescription("Private local VoxCPM2 voice studio")]
 [assembly: AssemblyCompany("SevenLabs")]
 [assembly: AssemblyProduct("SevenLabs")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
 
 namespace SevenLabs.Launcher
 {
@@ -20,11 +20,9 @@ namespace SevenLabs.Launcher
     {
         private const string ResourcePrefix = "payload/";
 
+        [STAThread]
         private static int Main()
         {
-            Console.OutputEncoding = Encoding.UTF8;
-            Console.Title = "SevenLabs";
-
             try
             {
                 string appRoot = Path.Combine(
@@ -44,14 +42,6 @@ namespace SevenLabs.Launcher
 
                 if (firstSetup || requirementsChanged)
                 {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine(firstSetup ? "SevenLabs — first-time setup" : "SevenLabs — updating components");
-                    Console.ResetColor();
-                    Console.WriteLine(firstSetup
-                        ? "The AI engine will be downloaded once. This can take several minutes."
-                        : "Required components changed and will be refreshed. Your data and models are preserved.");
-                    Console.WriteLine();
-
                     int setupResult = RunPowerShell(appRoot, "setup.ps1");
                     if (setupResult != 0 || !File.Exists(python))
                     {
@@ -60,7 +50,7 @@ namespace SevenLabs.Launcher
                     File.WriteAllText(installedVersionFile, requirementsVersion);
                 }
 
-                return RunPowerShell(appRoot, "start.ps1");
+                return StartDesktopApp(appRoot);
             }
             catch (Exception error)
             {
@@ -88,7 +78,6 @@ namespace SevenLabs.Launcher
                 return;
             }
 
-            Console.WriteLine("Preparing SevenLabs...");
             string rootWithSeparator = Path.GetFullPath(appRoot) + Path.DirectorySeparatorChar;
             foreach (string resource in resources)
             {
@@ -140,7 +129,8 @@ namespace SevenLabs.Launcher
             ProcessStartInfo startInfo = new ProcessStartInfo();
             startInfo.FileName = "powershell.exe";
             startInfo.WorkingDirectory = appRoot;
-            startInfo.UseShellExecute = false;
+            startInfo.UseShellExecute = true;
+            startInfo.WindowStyle = ProcessWindowStyle.Normal;
             startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + Path.Combine(appRoot, scriptName) + "\"";
 
             using (Process process = Process.Start(startInfo))
@@ -154,16 +144,35 @@ namespace SevenLabs.Launcher
             }
         }
 
+        private static int StartDesktopApp(string appRoot)
+        {
+            string pythonw = Path.Combine(appRoot, ".venv", "Scripts", "pythonw.exe");
+            if (!File.Exists(pythonw))
+            {
+                return StopWithError("The SevenLabs desktop runtime is missing. Run the installer again to repair it.");
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = pythonw;
+            startInfo.WorkingDirectory = appRoot;
+            startInfo.Arguments = "-m app.desktop";
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.EnvironmentVariables["PYTHONUTF8"] = "1";
+            startInfo.EnvironmentVariables["HF_HOME"] = Path.Combine(appRoot, "data", "models", "huggingface");
+            startInfo.EnvironmentVariables["HF_HUB_CACHE"] = Path.Combine(appRoot, "data", "models", "huggingface", "hub");
+
+            Process process = Process.Start(startInfo);
+            if (process == null)
+            {
+                return StopWithError("Windows could not open the SevenLabs desktop window.");
+            }
+            return 0;
+        }
+
         private static int StopWithError(string message)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine();
-            Console.WriteLine("SevenLabs could not start");
-            Console.ResetColor();
-            Console.WriteLine(message);
-            Console.WriteLine();
-            Console.WriteLine("Press Enter to close.");
-            Console.ReadLine();
+            MessageBox.Show(message, "SevenLabs could not start", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }

@@ -12,17 +12,6 @@ $env:PYTHONUTF8 = "1"
 $env:HF_HOME = Join-Path $projectRoot "data\models\huggingface"
 $env:HF_HUB_CACHE = Join-Path $env:HF_HOME "hub"
 
-try {
-    $running = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/health" -TimeoutSec 1
-    if ($running.ok) {
-        Start-Process "http://127.0.0.1:8765"
-        Write-Host "SevenLabs is already running." -ForegroundColor Green
-        exit 0
-    }
-} catch {}
-
-Start-Process "http://127.0.0.1:8765"
-Write-Host "SevenLabs is running. Keep this window open." -ForegroundColor Green
-Write-Host "Close this window or press Ctrl+C to stop it." -ForegroundColor DarkGray
-& $python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+Write-Host "Opening SevenLabs..." -ForegroundColor Green
+& $python -m app.desktop
 

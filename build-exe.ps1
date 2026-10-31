@@ -17,6 +17,8 @@ New-Item -ItemType Directory -Force -Path $distFolder | Out-Null
 $payloadFiles = @(
     Get-ChildItem -LiteralPath (Join-Path $projectRoot "app") -Recurse -File |
         Where-Object { $_.FullName -notmatch "__pycache__" -and $_.Extension -ne ".pyc" }
+    Get-ChildItem -LiteralPath (Join-Path $projectRoot "vendor\VoxCPM") -Recurse -File |
+        Where-Object { $_.FullName -notmatch "(__pycache__|\.git|\.egg-info)" -and $_.Extension -ne ".pyc" }
     Get-Item -LiteralPath (Join-Path $projectRoot "scripts\warm_models.py")
     Get-Item -LiteralPath (Join-Path $projectRoot "requirements.txt")
     Get-Item -LiteralPath (Join-Path $projectRoot "setup.ps1")
@@ -26,11 +28,12 @@ $payloadFiles = @(
 
 $compilerArguments = @(
     "/nologo",
-    "/target:exe",
+    "/target:winexe",
     "/platform:x64",
     "/optimize+",
     "/win32icon:$iconFile",
     "/out:$outputExe",
+    "/reference:System.Windows.Forms.dll",
     $sourceFile
 )
 

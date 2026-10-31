@@ -3,7 +3,8 @@ SevenLabs runs privately on your Windows computer.
 Before you continue:
 
 • The first launch requires an internet connection.
-• Python, PyTorch, Chatterbox, Whisper, and model files are downloaded during first-time setup.
+• Python, PyTorch, VoxCPM2 support, and Whisper are prepared during first-time setup.
+• The 2.3 GB VoxCPM2 voice model is downloaded from inside the app when you choose it.
 • Allow several gigabytes of free disk space and several minutes for setup.
 • Voice samples, generated audio, settings, and downloaded models stay in your local user data folder.
 • Only clone a voice that you own or have explicit permission to use.

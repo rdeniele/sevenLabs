@@ -1,10 +1,9 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { voices: [], history: [], selectedVoiceId: null, sampleBlob: null, sampleName: "recording.wav", recorder: null, mediaStream: null, timerId: null, startedAt: 0, generating: false, transcribeFile: null, chunkCount: 0, chunkTimer: null };
+const state = { voices: [], history: [], selectedVoiceId: null, mode: "clone", modelDownloaded: false, modelPoll: null, sampleBlob: null, sampleName: "recording.wav", recorder: null, mediaStream: null, timerId: null, startedAt: 0, generating: false, transcribeFile: null, chunkCount: 0, chunkTimer: null };
 const elements = {
   systemState: $("#systemState"), systemText: $("#systemText"), voiceList: $("#voiceList"), voiceEmpty: $("#voiceEmpty"), addVoiceButton: $("#addVoiceButton"), recordButton: $("#recordButton"), fileInput: $("#fileInput"),
-  scriptInput: $("#scriptInput"), wordCount: $("#wordCount"), chunkCount: $("#chunkCount"), characterCount: $("#characterCount"), splitMessage: $("#splitMessage"), modelSelect: $("#modelSelect"), languageSelect: $("#languageSelect"), expressionRange: $("#expressionRange"), expressionValue: $("#expressionValue"), fidelityRange: $("#fidelityRange"), fidelityValue: $("#fidelityValue"), consentCheckbox: $("#consentCheckbox"), generateButton: $("#generateButton"), generateLabel: $("#generateLabel"), generationProgress: $("#generationProgress"), progressLabel: $("#progressLabel"), progressTimer: $("#progressTimer"), errorBanner: $("#errorBanner"),
-  historyList: $("#historyList"), historyEmpty: $("#historyEmpty"), transcribeDrop: $("#transcribeDrop"), transcribeInput: $("#transcribeInput"), transcribeFileName: $("#transcribeFileName"), transcribeLanguage: $("#transcribeLanguage"), transcribeButton: $("#transcribeButton"), transcriptOutput: $("#transcriptOutput"), copyTranscript: $("#copyTranscript"), transcribeStatus: $("#transcribeStatus"),
-  outputFolderInput: $("#outputFolderInput"), saveFolderButton: $("#saveFolderButton"), folderStatus: $("#folderStatus"),
+  scriptInput: $("#scriptInput"), wordCount: $("#wordCount"), chunkCount: $("#chunkCount"), characterCount: $("#characterCount"), splitMessage: $("#splitMessage"), modeTabs: [...document.querySelectorAll("[data-mode]")], stylePrompt: $("#stylePrompt"), stylePromptLabel: $("#stylePromptLabel"), referenceTranscript: $("#referenceTranscript"), referenceTranscriptField: $("#referenceTranscriptField"), modeHelp: $("#modeHelp"), guidanceRange: $("#guidanceRange"), guidanceValue: $("#guidanceValue"), inferenceSteps: $("#inferenceSteps"), engineSetup: $("#engineSetup"), engineSetupTitle: $("#engineSetupTitle"), engineSetupText: $("#engineSetupText"), downloadModelButton: $("#downloadModelButton"), engineDownloadTrack: $("#engineDownloadTrack"), engineDownloadBar: $("#engineDownloadBar"), consentCheckbox: $("#consentCheckbox"), consentText: $("#consentText"), generateButton: $("#generateButton"), generateLabel: $("#generateLabel"), generationProgress: $("#generationProgress"), progressLabel: $("#progressLabel"), progressTimer: $("#progressTimer"), errorBanner: $("#errorBanner"),
+  historyList: $("#historyList"), historyEmpty: $("#historyEmpty"), transcribeDrop: $("#transcribeDrop"), transcribeInput: $("#transcribeInput"), transcribeFileName: $("#transcribeFileName"), transcribeLanguage: $("#transcribeLanguage"), transcribeModel: $("#transcribeModel"), transcribeButton: $("#transcribeButton"), transcriptOutput: $("#transcriptOutput"), copyTranscript: $("#copyTranscript"), transcribeStatus: $("#transcribeStatus"),
   voiceDialog: $("#voiceDialog"), dialogTitle: $("#dialogTitle"), dialogDescription: $("#dialogDescription"), voiceNameInput: $("#voiceNameInput"), recordingStage: $("#recordingStage"), recordingStatus: $("#recordingStatus"), recordingTimer: $("#recordingTimer"), samplePreview: $("#samplePreview"), voiceConsent: $("#voiceConsent"), dialogRecordButton: $("#dialogRecordButton"), saveVoiceButton: $("#saveVoiceButton"),
 };
 
@@ -19,10 +18,40 @@ function showError(message) { elements.errorBanner.textContent = message; elemen
 function clearError() { elements.errorBanner.hidden = true; }
 
 function updateGenerateState() {
-  const ready = state.selectedVoiceId && elements.scriptInput.value.trim() && elements.consentCheckbox.checked;
+  const voiceReady = state.mode === "design" || state.selectedVoiceId;
+  const transcriptReady = state.mode !== "ultimate" || elements.referenceTranscript.value.trim();
+  const ready = state.modelDownloaded && voiceReady && transcriptReady && elements.scriptInput.value.trim() && elements.consentCheckbox.checked;
   elements.generateButton.disabled = state.generating || !ready;
   elements.generateLabel.textContent = state.generating ? "Creating full audio…" : "Generate full audio";
 }
+
+function setMode(mode) {
+  state.mode = mode;
+  elements.modeTabs.forEach((button) => { const active = button.dataset.mode === mode; button.classList.toggle("active", active); button.setAttribute("aria-selected", String(active)); });
+  elements.referenceTranscriptField.hidden = mode !== "ultimate";
+  elements.stylePromptLabel.innerHTML = mode === "ultimate" ? "Style direction <small>optional</small>" : mode === "design" ? "Voice description <small>required for best results</small>" : "Style direction <small>optional</small>";
+  elements.stylePrompt.placeholder = mode === "design" ? "Young narrator, warm tone, clear diction, medium pace…" : "Warm, confident, conversational, medium pace…";
+  elements.modeHelp.textContent = mode === "design" ? "Create a new voice from a written description—no sample required." : mode === "ultimate" ? "Continue from a saved voice using the exact transcript of its reference audio." : "Clone a saved voice and optionally steer its emotion, pace, and style.";
+  elements.consentText.textContent = mode === "design" ? "I will use this synthetic voice responsibly." : "I own this voice or have permission to use it.";
+  updateGenerateState();
+}
+
+function renderEngineStatus(engine) {
+  state.modelDownloaded = Boolean(engine.model_downloaded);
+  elements.engineSetup.hidden = state.modelDownloaded;
+  elements.engineDownloadTrack.hidden = !engine.is_downloading;
+  elements.engineDownloadBar.style.width = `${engine.download_percent || 0}%`;
+  elements.downloadModelButton.disabled = engine.is_downloading;
+  elements.downloadModelButton.textContent = engine.is_downloading ? `${engine.download_percent || 0}%` : "Download model";
+  elements.engineSetupTitle.textContent = engine.download_error ? "Model download paused" : engine.is_downloading ? "Downloading VoxCPM2" : "VoxCPM2 is required";
+  elements.engineSetupText.textContent = engine.download_error || (engine.is_downloading ? `${engine.download_speed_mbps || 0} MB/s · keep SevenLabs open` : "Download the local voice model once, then use it offline.");
+  updateGenerateState();
+  if (engine.is_downloading && !state.modelPoll) state.modelPoll = setInterval(refreshEngineStatus, 1000);
+  if (!engine.is_downloading && state.modelPoll) { clearInterval(state.modelPoll); state.modelPoll = null; }
+}
+
+async function refreshEngineStatus() { try { const health = await api("/api/health"); renderEngineStatus(health.engine); } catch {} }
+async function downloadModel() { clearError(); try { const engine = await api("/api/model/download", { method: "POST" }); renderEngineStatus(engine); } catch (error) { showError(error.message); } }
 async function updateScriptStats() {
   const text = elements.scriptInput.value;
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -59,7 +88,7 @@ function renderHistory() {
   state.history.forEach((entry) => {
     const item = $("#historyItemTemplate").content.firstElementChild.cloneNode(true); const audio = item.querySelector("audio"); const play = item.querySelector(".play-button");
     item.querySelector("strong").textContent = entry.long_form ? `${entry.voice_name} · full audio` : entry.voice_name; item.querySelector("p").textContent = entry.text;
-    item.querySelector(".history-model").textContent = `${entry.model} · ${formatTime(entry.duration_seconds || 0)}${entry.chunk_count ? ` · ${entry.chunk_count} parts` : ""}`; item.querySelector(".history-time").textContent = formatDate(entry.created_at); audio.src = entry.audio_url;
+    item.querySelector(".history-model").textContent = `${entry.mode || entry.model} · ${formatTime(entry.duration_seconds || 0)}${entry.chunk_count ? ` · ${entry.chunk_count} parts` : ""}`; item.querySelector(".history-time").textContent = formatDate(entry.created_at); audio.src = entry.audio_url;
     play.addEventListener("click", async () => { document.querySelectorAll(".history-item audio").forEach((other) => { if (other !== audio) other.pause(); }); if (audio.paused) await audio.play(); else audio.pause(); });
     audio.addEventListener("play", () => setPlayIcon(play, true)); audio.addEventListener("pause", () => setPlayIcon(play, false)); audio.addEventListener("ended", () => setPlayIcon(play, false));
     const download = item.querySelector(".download-button"); download.href = entry.download_url; download.download = "";
@@ -85,29 +114,19 @@ async function saveVoice() { if (!state.sampleBlob) return; elements.saveVoiceBu
 async function generateSpeech() {
   if (elements.generateButton.disabled) return; clearError(); state.generating = true; updateGenerateState(); elements.generationProgress.hidden = false;
   const parts = state.chunkCount || 1; elements.progressLabel.textContent = `Generating and joining ${parts} ${parts === 1 ? "part" : "parts"}`; const started = Date.now(); const timer = setInterval(() => { elements.progressTimer.textContent = formatTime((Date.now() - started) / 1000); }, 250);
-  try { const entry = await api("/api/generate-long", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice_id: state.selectedVoiceId, text: elements.scriptInput.value.trim(), model: elements.modelSelect.value, language: elements.languageSelect.value, exaggeration: Number(elements.expressionRange.value) / 100, cfg_weight: Number(elements.fidelityRange.value) / 100, seed: 0, consent: elements.consentCheckbox.checked }) }); state.history.unshift(entry); renderHistory(); elements.progressLabel.textContent = "Full audio is ready"; const firstAudio = elements.historyList.querySelector("audio"); if (firstAudio) await firstAudio.play().catch(() => {}); setTimeout(() => { elements.generationProgress.hidden = true; }, 1200);
+  try { const entry = await api("/api/generate-long", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice_id: state.mode === "design" ? null : state.selectedVoiceId, text: elements.scriptInput.value.trim(), mode: state.mode, style_prompt: elements.stylePrompt.value.trim(), reference_transcript: elements.referenceTranscript.value.trim(), guidance: Number(elements.guidanceRange.value) / 10, inference_steps: Number(elements.inferenceSteps.value), seed: 0, consent: elements.consentCheckbox.checked }) }); state.history.unshift(entry); renderHistory(); elements.progressLabel.textContent = "Full audio is ready"; const firstAudio = elements.historyList.querySelector("audio"); if (firstAudio) await firstAudio.play().catch(() => {}); setTimeout(() => { elements.generationProgress.hidden = true; }, 1200);
   } catch (error) { elements.generationProgress.hidden = true; showError(error.message); } finally { clearInterval(timer); state.generating = false; updateGenerateState(); }
 }
 
 function chooseTranscribeFile(file) { if (!file) return; state.transcribeFile = file; elements.transcribeFileName.textContent = file.name; elements.transcribeButton.disabled = false; elements.transcribeStatus.textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · ready to transcribe locally`; }
-async function transcribeAudio() { if (!state.transcribeFile) return; elements.transcribeButton.disabled = true; elements.transcribeButton.textContent = "Transcribing…"; elements.transcribeStatus.textContent = "Listening to the entire file. Keep SevenLabs open."; const data = new FormData(); data.append("audio", state.transcribeFile, state.transcribeFile.name); data.append("language", elements.transcribeLanguage.value); try { const result = await api("/api/transcribe", { method: "POST", body: data }); elements.transcriptOutput.value = result.text; elements.copyTranscript.disabled = !result.text; elements.transcribeStatus.textContent = `${formatTime(result.duration_seconds)} audio · ${result.language.toUpperCase()} · transcribed on ${result.device.toUpperCase()}`; } catch (error) { elements.transcribeStatus.textContent = error.message; } finally { elements.transcribeButton.disabled = false; elements.transcribeButton.textContent = "Transcribe"; } }
+async function transcribeAudio() { if (!state.transcribeFile) return; elements.transcribeButton.disabled = true; elements.transcribeButton.textContent = "Transcribing…"; elements.transcribeStatus.textContent = "Listening to the entire file. Keep SevenLabs open."; const data = new FormData(); data.append("audio", state.transcribeFile, state.transcribeFile.name); data.append("language", elements.transcribeLanguage.value); data.append("model", elements.transcribeModel.value); try { const result = await api("/api/transcribe", { method: "POST", body: data }); elements.transcriptOutput.value = result.text; elements.copyTranscript.disabled = !result.text; elements.transcribeStatus.textContent = `${formatTime(result.duration_seconds)} audio · ${result.language.toUpperCase()} · Whisper ${result.model.toUpperCase()} on ${result.device.toUpperCase()}`; } catch (error) { elements.transcribeStatus.textContent = error.message; } finally { elements.transcribeButton.disabled = false; elements.transcribeButton.textContent = "Transcribe"; } }
 
-async function saveOutputFolder() {
-  const path = elements.outputFolderInput.value.trim();
-  if (!path) { elements.folderStatus.textContent = "Enter a folder location first."; return; }
-  elements.saveFolderButton.disabled = true; elements.saveFolderButton.textContent = "Saving…";
-  try { const result = await api("/api/settings/output-folder", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) }); elements.outputFolderInput.value = result.path; elements.outputFolderInput.title = result.path; elements.folderStatus.textContent = "New audio will save here."; }
-  catch (error) { elements.folderStatus.textContent = error.message; }
-  finally { elements.saveFolderButton.disabled = false; elements.saveFolderButton.textContent = "Save"; }
-}
+async function initialise() { try { const [health, voices, history] = await Promise.all([api("/api/health"), api("/api/voices"), api("/api/history")]); state.voices = voices; state.history = history; elements.systemState.classList.add(health.engine.installed ? "ready" : "error"); const model = health.engine.model_downloaded ? "VoxCPM2 ready" : "VoxCPM2 download needed"; elements.systemText.textContent = health.engine.installed ? `Local · ${health.engine.device.toUpperCase()} · ${model}` : "Setup required"; renderEngineStatus(health.engine); renderVoices(); renderHistory(); setMode("clone"); } catch { elements.systemState.classList.add("error"); elements.systemText.textContent = "Preview mode"; renderVoices(); renderHistory(); setMode("clone"); } }
 
-async function initialise() { try { const [health, voices, history, folder] = await Promise.all([api("/api/health"), api("/api/voices"), api("/api/history"), api("/api/settings/output-folder")]); state.voices = voices; state.history = history; elements.outputFolderInput.value = folder.path; elements.outputFolderInput.title = folder.path; elements.systemState.classList.add(health.engine.installed ? "ready" : "error"); const whisper = health.transcriber?.installed ? " · Whisper ready" : ""; elements.systemText.textContent = health.engine.installed ? `Local · ${health.engine.device.toUpperCase()}${whisper}` : "Setup required"; renderVoices(); renderHistory(); updateGenerateState(); } catch { elements.systemState.classList.add("error"); elements.systemText.textContent = "Preview mode"; renderVoices(); renderHistory(); updateGenerateState(); } }
-
-elements.scriptInput.addEventListener("input", updateScriptStats); elements.consentCheckbox.addEventListener("change", updateGenerateState); elements.expressionRange.addEventListener("input", () => { elements.expressionValue.textContent = elements.expressionRange.value; }); elements.fidelityRange.addEventListener("input", () => { elements.fidelityValue.textContent = elements.fidelityRange.value; });
-elements.modelSelect.addEventListener("change", () => { const multilingual = elements.modelSelect.value === "multilingual"; elements.languageSelect.disabled = !multilingual; if (!multilingual) elements.languageSelect.value = "en"; }); elements.recordButton.addEventListener("click", openRecordDialog); elements.addVoiceButton.addEventListener("click", openRecordDialog); elements.fileInput.addEventListener("change", () => { const file = elements.fileInput.files[0]; if (file) openUploadDialog(file); elements.fileInput.value = ""; });
+elements.scriptInput.addEventListener("input", updateScriptStats); elements.consentCheckbox.addEventListener("change", updateGenerateState); elements.referenceTranscript.addEventListener("input", updateGenerateState); elements.guidanceRange.addEventListener("input", () => { elements.guidanceValue.textContent = (Number(elements.guidanceRange.value) / 10).toFixed(1); }); elements.modeTabs.forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode))); elements.downloadModelButton.addEventListener("click", downloadModel);
+elements.recordButton.addEventListener("click", openRecordDialog); elements.addVoiceButton.addEventListener("click", openRecordDialog); elements.fileInput.addEventListener("change", () => { const file = elements.fileInput.files[0]; if (file) openUploadDialog(file); elements.fileInput.value = ""; });
 elements.dialogRecordButton.addEventListener("click", toggleRecording); elements.voiceConsent.addEventListener("change", updateSaveVoiceState); elements.voiceNameInput.addEventListener("input", updateSaveVoiceState); elements.saveVoiceButton.addEventListener("click", saveVoice); elements.generateButton.addEventListener("click", generateSpeech); elements.voiceDialog.addEventListener("close", resetVoiceDialog);
 elements.transcribeInput.addEventListener("change", () => chooseTranscribeFile(elements.transcribeInput.files[0])); elements.transcribeButton.addEventListener("click", transcribeAudio); elements.copyTranscript.addEventListener("click", async () => { await navigator.clipboard.writeText(elements.transcriptOutput.value); elements.copyTranscript.textContent = "Copied"; setTimeout(() => { elements.copyTranscript.textContent = "Copy text"; }, 1200); });
-elements.saveFolderButton.addEventListener("click", saveOutputFolder); elements.outputFolderInput.addEventListener("keydown", (event) => { if (event.key === "Enter") saveOutputFolder(); });
 ["dragenter", "dragover"].forEach((name) => elements.transcribeDrop.addEventListener(name, (event) => { event.preventDefault(); elements.transcribeDrop.classList.add("dragging"); })); ["dragleave", "drop"].forEach((name) => elements.transcribeDrop.addEventListener(name, (event) => { event.preventDefault(); elements.transcribeDrop.classList.remove("dragging"); })); elements.transcribeDrop.addEventListener("drop", (event) => chooseTranscribeFile(event.dataTransfer.files[0]));
 document.addEventListener("keydown", (event) => { if (event.ctrlKey && event.key === "Enter") generateSpeech(); });
-elements.languageSelect.disabled = true; updateScriptStats(); initialise();
+updateScriptStats(); initialise();

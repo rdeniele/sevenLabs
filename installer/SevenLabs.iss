@@ -1,5 +1,5 @@
 #define MyAppName "SevenLabs"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "SevenLabs"
 #define MyAppURL "https://github.com/rdeniele/sevenLabs"
 #define MyAppExeName "SevenLabs.exe"
@@ -14,6 +14,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
+DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
